@@ -1,7 +1,8 @@
+import DingTalk from './DingTalk';
 import { BOARDS, PASSPORT_FIRMWARE, type BoardId } from '../shared/firmware';
 import { Children, useEffect, useRef, useState } from 'react';
 import { App as AntApp, Alert, AutoComplete, Badge, Button, Card, Col, Descriptions, Empty, Flex, Form, Grid, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Progress, Row, Segmented, Select, Slider, Space, Spin, Statistic, Switch, Table, Tag, Typography, Upload } from 'antd';
-import { ApiOutlined, AudioOutlined, CheckOutlined, DashboardOutlined, DeleteOutlined, DisconnectOutlined, ExperimentOutlined, FileTextOutlined, LinkOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SendOutlined, SoundOutlined, StopOutlined, ThunderboltOutlined, UploadOutlined, UsbOutlined } from '@ant-design/icons';
+import { ApiOutlined, AudioOutlined, BellOutlined, CheckOutlined, DashboardOutlined, DeleteOutlined, DisconnectOutlined, ExperimentOutlined, FileTextOutlined, LinkOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SendOutlined, SoundOutlined, StopOutlined, ThunderboltOutlined, UploadOutlined, UsbOutlined } from '@ant-design/icons';
 import type { Json, Settings, Snapshot } from '../shared/types';
 import { api, post, upload } from './api';
 import { SerialFlasher, type ChipInfo } from './serial';
@@ -11,7 +12,7 @@ import type { BrowserAudioEvent, BrowserAudioStop } from '../shared/browser-audi
 import { BrowserSpeechPlayer, type PlaybackState } from './browser-audio';
 import type { WifiScan } from '../shared/wifi';
 
-type Page = 'overview' | 'flash' | 'devices' | 'ai' | 'tasks' | 'roles' | 'voice' | 'mcp' | 'logs';
+type Page = 'overview' | 'flash' | 'devices' | 'ai' | 'tasks' | 'roles' | 'voice' | 'mcp' | 'dingtalk' | 'logs';
 const pages = [
   { key: 'overview', label: '概览', icon: <DashboardOutlined/> },
   { key: 'flash', label: '串口刷写', icon: <UsbOutlined/> },
@@ -21,6 +22,7 @@ const pages = [
   { key: 'roles', label: '角色与语音', icon: <SoundOutlined/> },
   { key: 'voice', label: '声纹', icon: <AudioOutlined/> },
   { key: 'mcp', label: 'MCP', icon: <ApiOutlined/> },
+  { key: 'dingtalk', label: '钉钉消息通知', icon: <BellOutlined/> },
   { key: 'logs', label: '日志', icon: <FileTextOutlined/> },
 ];
 const states: Record<string, string> = { offline: '未连接', ready: '已接通 OTA', connected: '已连接', idle: '待命', listening: '聆听中', recognizing: '识别中', thinking: '思考中', speaking: '播报中' };
@@ -86,6 +88,7 @@ export default function App() {
           {page === 'roles' && <RoleSettings data={data} refresh={refresh}/>}
           {page === 'voice' && <Voice data={data} refresh={refresh}/>}
           {page === 'mcp' && <Mcp data={data} refresh={refresh}/>}
+          <div hidden={page !== 'dingtalk'}><DingTalk data={data} visible={page === 'dingtalk'}/></div>
           {page === 'logs' && <Logs data={data}/>}
         </>}
       </Flex>

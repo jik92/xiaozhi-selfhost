@@ -43,7 +43,7 @@ export class Store {
     this.db.exec('DELETE FROM logs WHERE id < (SELECT COALESCE(MAX(id),0)-2000 FROM logs)');
   }
   redact(text: string) {
-    for (const key of [this.secret, ...Object.values(this.settings).map(v => typeof v === 'object' && v && 'apiKey' in v ? String(v.apiKey) : '')]) if (key) text = text.replaceAll(key, '[已隐藏]');
+    for (const key of [this.secret, this.get('dingtalk')?.clientSecret, ...Object.values(this.settings).map(v => typeof v === 'object' && v && 'apiKey' in v ? String(v.apiKey) : '')]) if (key) text = text.replaceAll(key, '[已隐藏]');
     return text.replace(/Bearer\s+[^\s"']+/gi, 'Bearer [已隐藏]').replace(/([?&](?:key|token)=)[^&\s]+/gi, '$1[已隐藏]');
   }
   device(id: string, patch: Partial<Device> = {}) {

@@ -11,6 +11,8 @@ import { encryptUdp, decryptUdp } from '../server/protocol';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { z } from 'zod';
+import { FRIEND_ROLE } from '../shared/roles';
+import { DINGTALK_TOPIC } from '../server/dingtalk';
 
 async function freePort() { const s = createServer(); s.listen(0, '127.0.0.1'); await once(s, 'listening'); const port = (s.address() as { port: number }).port; await new Promise<void>(r => s.close(() => r())); return port; }
 async function until(predicate: () => boolean, timeout = 8000) { const end = Date.now() + timeout; while (!predicate()) { if (Date.now() > end) throw new Error('等待集成结果超时'); await Bun.sleep(15); } }
@@ -20,13 +22,14 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
   let app: Awaited<ReturnType<typeof startApp>>; let upstream: ReturnType<typeof Bun.serve>; let directory: string; let base: string; let mqttPort: number; let udpPort: number;
   let mcpHost: ReturnType<typeof Bun.serve>; let mcpServer: McpServer;
   const seen: string[] = [];
+  let lastChat: any; let lastSpeech: any;
   beforeAll(async () => {
     directory = mkdtempSync(`${tmpdir()}/xiaozhi-integration-`); mqttPort = await freePort(); udpPort = await freePort();
     upstream = Bun.serve({ port: 0, async fetch(req) {
       const path = new URL(req.url).pathname; const body = await req.json() as any; seen.push(path);
-      if (path === '/v1/audio/speech') return new Response(new Uint8Array(pcmToWav(tone())), { headers: { 'Content-Type': 'audio/wav' } });
+      if (path === '/v1/audio/speech') { lastSpeech = body; return new Response(new Uint8Array(pcmToWav(tone())), { headers: { 'Content-Type': 'audio/wav' } }); }
       if (body.model === 'asr-test') return Response.json({ choices: [{ message: { role: 'assistant', content: '你好小智' } }] });
-      return Response.json({ choices: [{ message: { role: 'assistant', content: '你好，这是本地回复。' } }] });
+      lastChat = body; return Response.json({ choices: [{ message: { role: 'assistant', content: '你好，这是本地回复。' } }] });
     } });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
     mcpServer = new McpServer({ name: 'test-tools', version: '1.0.0' });
@@ -42,6 +45,35 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
   afterAll(async () => { await app?.close(); upstream?.stop(true); mcpHost?.stop(true); await mcpServer?.close(); if (directory) rmSync(directory, { recursive: true, force: true }); });
   async function request(path: string, body?: unknown) { return fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   async function register(id: string, transport = 'websocket') { const r = await request('/api/provision', { id, transport, board: 'wha103' }); expect(r.ok).toBe(true); return r.json() as Promise<any>; }
+
+  test('DingTalk callback → current role → TTS → device Opus without chat tools or a browser action', async () => {
+    const id = 'dingtalk-device'; await register(id);
+    const original = structuredClone(app.store.settings);
+    app.store.saveSettings({ ...original, activeRoleId: FRIEND_ROLE.id });
+    const ws = new WebSocket(`ws://127.0.0.1:${app.server.port}/xiaozhi/v1/?device_id=${id}&token=${app.store.token(id)}`);
+    const control: any[] = []; const frames: Buffer[] = [];
+    ws.onmessage = event => { if (typeof event.data === 'string') control.push(JSON.parse(event.data)); else frames.push(Buffer.from(event.data)); };
+    try {
+      await once(ws, 'open'); ws.send(JSON.stringify({ type: 'hello', audio_params: { sample_rate: 16000, frame_duration: 60 } }));
+      await until(() => control.some(m => m.type === 'hello'));
+      const config = { enabled: false, clientId: 'test-client', clientSecret: 'private-ding-secret', deviceId: id };
+      const saved = await fetch(base + '/api/dingtalk', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
+      expect(saved.ok).toBe(true); expect(await saved.text()).not.toContain('private-ding-secret');
+      expect(await (await request('/api/dingtalk')).text()).not.toContain('private-ding-secret');
+      expect((await fetch(base + '/api/dingtalk', { headers: { Origin: 'https://untrusted.example' } })).status).toBe(403);
+      // Inject a real protocol callback, with simulated credentials; never open a live DingTalk connection.
+      app.store.set('dingtalk', { ...config, enabled: true });
+      const acks: any[] = [];
+      app.dingtalk.frame(JSON.stringify({ type: 'CALLBACK', headers: { topic: DINGTALK_TOPIC, messageId: 'stream-test' }, data: JSON.stringify({ msgId: 'notice-test', createAt: Date.now(), conversationType: '1', senderNick: '同事', senderStaffId: 'sender-1', text: { content: '下午三点开会' }, msgtype: 'text' }) }), { readyState: 1, send: s => acks.push(JSON.parse(s)), close() {}, addEventListener() {} });
+      expect(acks[0].code).toBe(200);
+      await until(() => app.dingtalk.snapshot().records[0]?.state === 'played');
+      expect(lastChat.messages[0].content).toContain(FRIEND_ROLE.prompt);
+      expect(lastChat.messages[1].content).toContain('下午三点开会'); expect(lastChat.tools).toBeUndefined();
+      expect(lastSpeech.voice).toBe(FRIEND_ROLE.voices.openai);
+      expect(frames.length).toBeGreaterThan(0); expect(control.some(m => m.type === 'tts' && m.state === 'stop')).toBe(true);
+      expect(app.store.messages().some(m => m.deviceId === id && m.role === 'broadcast')).toBe(true);
+    } finally { app.store.set('dingtalk', { enabled: false }); app.store.saveSettings(original); ws.close(); }
+  });
 
   test('snapshots, provisioning and OTA all use the current address after network changes', async () => {
     const original = app.store.connectionHost;

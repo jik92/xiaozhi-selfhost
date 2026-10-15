@@ -12,6 +12,7 @@ import type { Json, McpEndpoint, Speaker, Snapshot } from '../shared/types';
 import { TaskScheduler } from './tasks';
 import { BUILTIN_ID } from './builtin-tools';
 import { scanWifi } from './wifi';
+import { DingTalkNotifications } from './dingtalk';
 
 const deviceIdSchema = z.string().regex(/^[a-zA-Z0-9:_-]{1,80}$/);
 const textSchema = z.object({ text: z.string().trim().min(1).max(4000) });
@@ -22,6 +23,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
   const port = options.port ?? Number(process.env.PORT || 18080); const mqttPort = options.mqttPort ?? Number(process.env.MQTT_PORT || 18883); const udpPort = options.udpPort ?? Number(process.env.UDP_PORT || 18884);
   const store = new Store(options.dataDir); const providers = new Providers(store); const mcp = new McpManager(store); const manager = new SessionManager(store, providers, mcp);
   const tasks = new TaskScheduler(store, (task, signal) => manager.runTask(task.deviceId, task.prompt, signal));
+  const dingtalk = new DingTalkNotifications(store, manager);
   const root = resolve('dist');
   let mqtt: Awaited<ReturnType<typeof startMqtt>> | undefined;
   let activePort = port;
@@ -63,6 +65,8 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           return json(result);
         }
         if (path === '/api/snapshot') return json(snapshot());
+        if (path === '/api/dingtalk' && req.method === 'GET') return json(dingtalk.snapshot());
+        if (path === '/api/dingtalk' && req.method === 'PUT') return json(dingtalk.save(await req.json()));
         if (path === '/api/wifi' && req.method === 'GET') return json(await scanWifi());
         const userAudioRoute = path.match(/^\/api\/messages\/([1-9]\d{0,14})\/audio$/);
         if (userAudioRoute && req.method === 'GET') {
@@ -179,9 +183,10 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
   });
   activePort = server.port!;
   try { if (options.transports !== false) mqtt = await startMqtt(store, manager, mqttPort, udpPort); }
-  catch (e) { await tasks.close(); server.stop(true); store.close(); throw e; }
+  catch (e) { await dingtalk.close(); await tasks.close(); server.stop(true); store.close(); throw e; }
+  dingtalk.restart();
   store.log('success', '网关', `本地服务已启动 ${connection().otaUrl}`);
-  return { server, store, manager, providers, mcp, tasks, connection, async close() { await tasks.close(); manager.closeAll(); mqtt?.close(); providers.speaker.close(); await mcp.close(); server.stop(true); store.close(); } };
+  return { server, store, manager, providers, mcp, tasks, dingtalk, connection, async close() { await dingtalk.close(); await tasks.close(); manager.closeAll(); mqtt?.close(); providers.speaker.close(); await mcp.close(); server.stop(true); store.close(); } };
 }
 async function upload(req: Request) { const form = await req.formData(); const file = form.get('file'); if (!(file instanceof File) || !file.size || file.size > 20 * 1024 * 1024) throw new Error('请选择小于 20MB 的音频文件'); return new Uint8Array(await file.arrayBuffer()); }
 
