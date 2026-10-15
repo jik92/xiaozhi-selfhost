@@ -2,7 +2,7 @@
 
 用 Chrome 连接 ESP32，在一个界面里完成串口配置、固件刷写、设备对话、AI 设置、声纹和 MCP 调试。
 
-**Bun + React + Ant Design + Tailwind CSS**。网关由 TypeScript 实现，不需要部署两套参考项目、MySQL 或 Redis。SQLite 保存设置与记录；本地声纹模型是可选组件。
+**Bun + React + Ant Design**。网关由 TypeScript 实现，不需要部署两套参考项目、MySQL 或 Redis。SQLite 保存设置与记录；本地声纹模型是可选组件。
 
 ## 启动
 

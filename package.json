@@ -27,13 +27,11 @@
     "zod": "latest"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "latest",
     "@types/bun": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "@types/w3c-web-serial": "latest",
     "@vitejs/plugin-react": "latest",
-    "tailwindcss": "latest",
     "typescript": "latest",
     "vite": "latest"
   },

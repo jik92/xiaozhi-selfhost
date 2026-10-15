@@ -1,24 +1,27 @@
-import { useEffect, useRef, useState } from 'react';
-import { App as AntApp, Alert, Button, Empty, Form, Input, InputNumber, Modal, Progress, Segmented, Select, Slider, Space, Spin, Switch, Table, Tag, Tooltip, Upload } from 'antd';
-import { ApiOutlined, ArrowRightOutlined, AudioOutlined, CheckCircleFilled, CheckOutlined, CloudUploadOutlined, CodeOutlined, CopyOutlined, DashboardOutlined, DeleteOutlined, DisconnectOutlined, ExperimentOutlined, FileTextOutlined, GlobalOutlined, LaptopOutlined, LinkOutlined, LoadingOutlined, PlayCircleOutlined, PlusOutlined, PoweroffOutlined, ReloadOutlined, RobotOutlined, SafetyCertificateOutlined, SendOutlined, SettingOutlined, SoundOutlined, StopOutlined, ThunderboltOutlined, ToolOutlined, UploadOutlined, UsbOutlined, WifiOutlined } from '@ant-design/icons';
-import type { Device, Json, Settings, Snapshot } from '../shared/types';
+import { Children, useEffect, useRef, useState } from 'react';
+import { App as AntApp, Alert, Badge, Button, Card, Col, Descriptions, Empty, Flex, Form, Grid, Input, InputNumber, Layout, Menu, Modal, Progress, Row, Select, Slider, Space, Spin, Statistic, Switch, Table, Tag, Typography, Upload } from 'antd';
+import { ApiOutlined, AudioOutlined, CheckOutlined, DashboardOutlined, DeleteOutlined, DisconnectOutlined, ExperimentOutlined, FileTextOutlined, LinkOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SendOutlined, SoundOutlined, StopOutlined, ThunderboltOutlined, UploadOutlined, UsbOutlined } from '@ant-design/icons';
+import type { Json, Settings, Snapshot } from '../shared/types';
 import { api, post, upload } from './api';
 import { SerialFlasher, type ChipInfo } from './serial';
 
 type Page = 'overview' | 'flash' | 'devices' | 'ai' | 'voice' | 'mcp' | 'logs';
-const pages: { key: Page; label: string; icon: React.ReactNode; description: string }[] = [
-  { key: 'overview', label: '工作台', icon: <DashboardOutlined/>, description: '设备、连接和语音服务，一处掌握。' },
-  { key: 'flash', label: '串口刷写', icon: <UsbOutlined/>, description: '通过 Chrome 连接设备，写入固件与本地服务地址。' },
-  { key: 'devices', label: '设备与对话', icon: <RobotOutlined/>, description: '查看设备状态，测试对话或向设备主动播报。' },
-  { key: 'ai', label: 'AI 设置', icon: <ExperimentOutlined/>, description: '选择自己的模型、语音识别和语音合成服务。' },
-  { key: 'voice', label: '声纹识别', icon: <AudioOutlined/>, description: '为说话人登记音频样本，在对话中识别身份。' },
-  { key: 'mcp', label: 'MCP 工具', icon: <ApiOutlined/>, description: '连接远程工具服务，也可以调用设备声明的工具。' },
-  { key: 'logs', label: '运行日志', icon: <FileTextOutlined/>, description: '实时查看本地网关、连接和工具调用事件。' },
+const pages = [
+  { key: 'overview', label: '概览', icon: <DashboardOutlined/> },
+  { key: 'flash', label: '串口刷写', icon: <UsbOutlined/> },
+  { key: 'devices', label: '设备与对话', icon: <RobotOutlined/> },
+  { key: 'ai', label: 'AI 设置', icon: <ExperimentOutlined/> },
+  { key: 'voice', label: '声纹', icon: <AudioOutlined/> },
+  { key: 'mcp', label: 'MCP', icon: <ApiOutlined/> },
+  { key: 'logs', label: '日志', icon: <FileTextOutlined/> },
 ];
 const states: Record<string, string> = { offline: '未连接', ready: '已接通 OTA', connected: '已连接', idle: '待命', listening: '聆听中', recognizing: '识别中', thinking: '思考中', speaking: '播报中' };
 const shortTime = (n: number) => new Date(n).toLocaleTimeString('zh-CN', { hour12: false });
-function Status({ online, text }: { online: boolean; text: string }) { return <span className={`status-pill ${online ? 'good' : ''}`}><i/>{text}</span>; }
-function Panel({ title, subtitle, extra, children, className = '' }: { title: React.ReactNode; subtitle?: string; extra?: React.ReactNode; children: React.ReactNode; className?: string }) { return <section className={`panel ${className}`}><div className="panel-heading"><div><h3>{title}</h3>{subtitle && <p>{subtitle}</p>}</div>{extra}</div>{children}</section>; }
+function Status({ online, text }: { online: boolean; text: string }) { return <Badge status={online ? 'success' : 'default'} text={text}/>; }
+function Panel({ title, extra, children }: { title: React.ReactNode; extra?: React.ReactNode; children: React.ReactNode }) { return <Card size="small" title={title} extra={extra}>{children}</Card>; }
+function Columns({ children, count = 2 }: { children: React.ReactNode; count?: number }) {
+  return <Row gutter={[12, 12]}>{Children.toArray(children).map((child, i) => <Col key={i} xs={24} md={count === 3 ? 12 : 24 / count} xl={24 / count}>{child}</Col>)}</Row>;
+}
 function useSnapshot() {
   const [data, setData] = useState<Snapshot>(); const [connected, setConnected] = useState(false); const [error, setError] = useState('');
   async function refresh() { try { setData(await api<Snapshot>('/snapshot')); setError(''); } catch (e) { setError(String(e)); } }
@@ -49,55 +52,74 @@ function useSnapshot() {
 
 export default function App() {
   const initial = location.hash.slice(1); const [page, setPage] = useState<Page>(pages.some(p => p.key === initial) ? initial as Page : 'overview');
-  const { data, connected, error, refresh } = useSnapshot(); const { message } = AntApp.useApp();
+  const { data, connected, error, refresh } = useSnapshot();
+  const screens = Grid.useBreakpoint();
   function navigate(p: Page) { location.hash = p; setPage(p); }
   useEffect(() => { const listener = () => { const key = location.hash.slice(1); if (pages.some(p => p.key === key)) setPage(key as Page); }; addEventListener('hashchange', listener); return () => removeEventListener('hashchange', listener); }, []);
-  const meta = pages.find(p => p.key === page)!;
-  const copy = (value: string) => navigator.clipboard.writeText(value).then(() => message.success('已复制')).catch(() => message.error('复制失败，请手动选择地址'));
-  return <div className="app-shell">
-    <aside className="sidebar"><a className="brand" href="#overview" onClick={() => navigate('overview')}><span className="brand-mark"><RobotOutlined/></span><span>小智<span className="brand-sub">LOCAL STUDIO</span></span></a>
-      <div className="nav-caption">本地工作空间</div>
-      <nav>{pages.map(p => <button key={p.key} className={`nav-item ${page === p.key ? 'selected' : ''}`} aria-label={p.label} onClick={() => navigate(p.key)}>{p.icon}<span>{p.label}</span>{p.key === 'devices' && !!data?.devices.filter(d => d.online).length && <b>{data.devices.filter(d => d.online).length}</b>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="local-badge"><LaptopOutlined/><div><strong>运行在你的电脑</strong><small>设备连接自己的服务</small></div></div><div className="version">小智本地工作台 <span>v0.1.0</span></div></div>
-    </aside>
-    <div className="main-shell"><header className="topbar"><div className="breadcrumb">工作空间 <span>/</span> <strong>{meta.label}</strong></div><Space size={14}><Status online={connected} text={connected ? '本地网关在线' : '正在连接网关'}/><Tooltip title="刷新状态"><Button type="text" icon={<ReloadOutlined/>} onClick={refresh} aria-label="刷新状态"/></Tooltip><span className="avatar">本地</span></Space></header>
-      <main><div className="page-heading"><div><div className="eyebrow">XIAOZHI / {page.toUpperCase()}</div><h1>{meta.label}</h1><p>{meta.description}</p></div>{page !== 'flash' && <Button type="primary" icon={<UsbOutlined/>} onClick={() => navigate('flash')}>连接新设备</Button>}</div>
-        {error && <Alert type="error" showIcon title={error} style={{ marginBottom: 20 }}/>}
-        {!data ? <div className="loading-state"><Spin indicator={<LoadingOutlined spin/>}/><p>正在读取本地工作空间…</p><Button onClick={refresh}>重新连接</Button></div> : <>
-          {page === 'overview' && <Overview data={data} navigate={navigate} copy={copy}/>}
+  return <Layout style={{ minHeight: '100vh' }}>
+    <Layout.Header style={{ height: 'auto', lineHeight: 'normal', padding: '0 16px', background: 'var(--ant-color-bg-container)' }}>
+      <Flex align="center" justify="space-between" gap={12} style={{ minHeight: 44 }}>
+        <Space><RobotOutlined/><Typography.Text strong>小智本地工作台</Typography.Text></Space>
+        <Space><Badge status={connected ? 'success' : 'error'} text={screens.sm ? (connected ? '网关在线' : '网关离线') : undefined}/><Button icon={<ReloadOutlined/>} onClick={refresh} aria-label="刷新状态"/></Space>
+      </Flex>
+      <Menu mode="horizontal" selectedKeys={[page]} items={pages} onClick={({ key }) => navigate(key as Page)}/>
+    </Layout.Header>
+    <Layout.Content style={{ padding: screens.sm ? 16 : 8, width: '100%', maxWidth: 1440, margin: '0 auto' }}>
+      <Flex vertical gap={12}>
+        {error && <Alert type="error" showIcon title={error}/>}
+        {!data ? <Card><Flex align="center" justify="center" gap={12}><Spin/><Button onClick={refresh}>重新连接</Button></Flex></Card> : <>
+          {page === 'overview' && <Overview data={data} navigate={navigate}/>}
           <div hidden={page !== 'flash'}><Flash data={data} refresh={refresh} navigate={navigate}/></div>
           {page === 'devices' && <Devices data={data} refresh={refresh}/>}
           {page === 'ai' && <AiSettings data={data} refresh={refresh}/>}
-          {page === 'voice' && <Voice data={data} refresh={refresh} navigate={navigate}/>}
+          {page === 'voice' && <Voice data={data} refresh={refresh}/>}
           {page === 'mcp' && <Mcp data={data} refresh={refresh}/>}
           {page === 'logs' && <Logs data={data}/>}
         </>}
-        <footer><span><SafetyCertificateOutlined/> 设备连接与模型服务由你掌控</span><span>本地工作台 · Web Serial / WebSocket / MQTT + UDP</span></footer>
-      </main>
-    </div>
-  </div>;
+      </Flex>
+    </Layout.Content>
+  </Layout>;
 }
 
-function Overview({ data, navigate, copy }: { data: Snapshot; navigate: (p: Page) => void; copy: (v: string) => void }) {
-  const online = data.devices.filter(d => d.online); const active = online[0] || data.devices[0];
-  return <>
-    <div className="overview-hero"><div className="hero-copy"><div className="hero-kicker"><span/> YOUR DEVICE. YOUR SERVER.</div><h2>把小智，<br/>带回你的本地环境。</h2><p>从一根 USB 线开始。刷写、配网、语音对话，<br className="desktop-break"/>让每一次连接都有迹可循。</p><Space wrap><Button type="primary" size="large" icon={<UsbOutlined/>} onClick={() => navigate('flash')}>开始连接设备</Button><Button size="large" onClick={() => navigate('ai')}>配置 AI 服务 <ArrowRightOutlined/></Button></Space><div className="hero-footnote"><CheckCircleFilled/> 无需小智官方账号 <span>·</span> 浏览器直接刷写</div></div>
-      <div className="device-scene" aria-label="设备与本地网关连接示意"><div className="scene-grid"/><div className="scene-caption">LOCAL CONNECTION / 接入示意</div><div className="hardware"><div className="hardware-led"/><div className="hardware-screen"><span className="screen-top">XIAOZHI LOCAL</span><div className="screen-eyes"><i/><i/></div><span className="screen-mouth"/><span className="screen-bottom">{active?.online ? '已连接本地' : '等待连接'}</span></div><div className="speaker-slots">{Array.from({ length: 6 }, (_, i) => <i key={i}/>)}</div><span className="hardware-usb"/></div><div className="connection-line"><span/><span/><span/><span/><span/></div><div className="scene-server"><LaptopOutlined/><div><b>本地网关</b><small>{data.connection.host}</small></div><span className="green-dot"/></div><div className="scene-device-label"><b>{active?.board?.toUpperCase() || 'WHA103 / ESP32-C3'}</b><small>128 × 64 OLED · USB Serial</small></div></div>
-    </div>
-    <div className="stats-grid"><Stat icon={<RobotOutlined/>} label="在线设备" value={online.length} suffix={`/ ${data.devices.length} 台`} color="blue"/><Stat icon={<SoundOutlined/>} label="对话记录" value={data.messages.filter(m => m.role === 'user').length} suffix="条" color="purple"/><Stat icon={<ApiOutlined/>} label="远程工具服务" value={data.endpoints.length} suffix="个" color="teal"/><Stat icon={<AudioOutlined/>} label="已登记声纹" value={data.speakers.filter(s => s.enrolled).length} suffix="位" color="orange"/></div>
-    <div className="two-columns"><Panel title="设备接入" subtitle="从连接串口到本地对话" extra={<Button type="link" onClick={() => navigate('devices')}>查看设备 <ArrowRightOutlined/></Button>}>
-      {data.devices.length ? data.devices.slice(0, 3).map(d => <div className="device-row" key={d.id}><span className="device-icon"><RobotOutlined/></span><div className="grow"><b>{d.name}</b><small>{d.board || '待识别板型'} <span>·</span> {d.id}</small></div><Status online={d.online} text={states[d.state] || d.state}/></div>) : <div className="empty-device"><span className="outline-icon"><UsbOutlined/></span><h4>第一台小智，等你连接</h4><p>接上 USB，在浏览器中选择设备串口。</p><Button onClick={() => navigate('flash')}>前往串口刷写 <ArrowRightOutlined/></Button></div>}
-      <div className="connection-strip"><span className="protocol-label">OTA</span><code>{data.connection.otaUrl}</code><Button type="text" icon={<CopyOutlined/>} onClick={() => copy(data.connection.otaUrl)} aria-label="复制 OTA 地址"/></div>
-    </Panel><Panel title="语音服务" subtitle="当前工作空间的实际配置" extra={<Button type="link" onClick={() => navigate('ai')}>管理设置 <ArrowRightOutlined/></Button>}>
-      <Service icon={<CodeOutlined/>} name="大模型" value={data.settings.llm.model} ready={!!data.settings.llm.apiKey}/><Service icon={<AudioOutlined/>} name="语音识别" value={data.settings.asr.model} ready={!!data.settings.asr.apiKey}/><Service icon={<SoundOutlined/>} name="语音合成" value={data.settings.tts.type === 'edge' ? 'Edge TTS · 在线服务' : data.settings.tts.model} ready={data.health.ffmpeg && (data.settings.tts.type === 'edge' || !!data.settings.tts.apiKey)}/>
-      <div className="service-note"><LinkOutlined/> 已配置不代表上游可用，请在 AI 设置中测试连接。</div>
-    </Panel></div>
-    <Panel title="最近动态" extra={<Button type="link" onClick={() => navigate('logs')}>全部日志 <ArrowRightOutlined/></Button>}><EventList logs={data.logs.slice(-4).reverse()}/></Panel>
-  </>;
+function Overview({ data, navigate }: { data: Snapshot; navigate: (p: Page) => void }) {
+  return <Flex vertical gap={12}>
+    <Row gutter={[12, 12]}>{[
+      { title: '在线设备', value: data.devices.filter(d => d.online).length, suffix: `/ ${data.devices.length}` },
+      { title: '对话记录', value: data.messages.filter(m => m.role === 'user').length },
+      { title: 'MCP 服务', value: data.endpoints.length },
+      { title: '已登记声纹', value: data.speakers.filter(s => s.enrolled).length },
+    ].map(s => <Col key={s.title} xs={12} md={6}><Card size="small"><Statistic {...s}/></Card></Col>)}</Row>
+    <Columns>
+      <Panel title="设备" extra={<Space><Button onClick={() => navigate('flash')} icon={<UsbOutlined/>}>连接设备</Button><Button onClick={() => navigate('devices')}>对话</Button></Space>}>
+        <Table rowKey="id" size="small" dataSource={data.devices} pagination={false} scroll={{ x: 400 }} columns={[
+          { title: '名称', dataIndex: 'name' }, { title: '板型', dataIndex: 'board' },
+          { title: '状态', render: (_, d) => <Status online={d.online} text={states[d.state] || d.state}/> },
+        ]}/>
+      </Panel>
+      <Panel title="AI 服务" extra={<Button onClick={() => navigate('ai')}>设置</Button>}>
+        <Descriptions size="small" column={1} items={[
+          { key: 'llm', label: '大模型', children: <Space><Typography.Text>{data.settings.llm.model}</Typography.Text><Tag color={data.settings.llm.apiKey ? 'green' : 'default'}>{data.settings.llm.apiKey ? '已配置' : '未配置'}</Tag></Space> },
+          { key: 'asr', label: '语音识别', children: <Space><Typography.Text>{data.settings.asr.model}</Typography.Text><Tag color={data.settings.asr.apiKey ? 'green' : 'default'}>{data.settings.asr.apiKey ? '已配置' : '未配置'}</Tag></Space> },
+          { key: 'tts', label: '语音合成', children: <Space><Typography.Text>{data.settings.tts.type === 'edge' ? 'Edge TTS' : data.settings.tts.model}</Typography.Text><Tag color={data.health.ffmpeg ? 'green' : 'orange'}>{data.health.ffmpeg ? 'FFmpeg 就绪' : '缺少 FFmpeg'}</Tag></Space> },
+        ]}/>
+      </Panel>
+    </Columns>
+    <Panel title="接入地址"><Descriptions size="small" column={{ xs: 1, sm: 1, md: 2 }} items={[
+      { key: 'ota', label: 'OTA', children: <Typography.Text copyable>{data.connection.otaUrl}</Typography.Text> },
+      { key: 'ws', label: 'WebSocket', children: <Typography.Text copyable>{data.connection.websocketUrl}</Typography.Text> },
+    ]}/></Panel>
+    <Panel title="最近日志" extra={<Button onClick={() => navigate('logs')}>全部日志</Button>}><EventList logs={data.logs.slice(-5).reverse()}/></Panel>
+  </Flex>;
 }
-function Stat({ icon, label, value, suffix, color }: { icon: React.ReactNode; label: string; value: number; suffix: string; color: string }) { return <div className="stat"><span className={`stat-icon ${color}`}>{icon}</span><div><p>{label}</p><strong>{value}<small>{suffix}</small></strong></div></div>; }
-function Service({ icon, name, value, ready }: { icon: React.ReactNode; name: string; value: string; ready: boolean }) { return <div className="service-row"><span className="service-icon">{icon}</span><div className="grow"><b>{name}</b><small>{value}</small></div><Tag color={ready ? 'green' : 'default'}>{ready ? '已配置' : '待配置'}</Tag></div>; }
-function EventList({ logs }: { logs: Snapshot['logs'] }) { return logs.length ? <div className="events">{logs.map(log => <div className="event-row" key={log.id}><i className={log.level}/><span className="event-scope">{log.scope}</span><span className="grow">{log.message}</span><time>{shortTime(log.time)}</time></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="等待设备或服务产生事件"/>; }
+function EventList({ logs }: { logs: Snapshot['logs'] }) {
+  const colors: Record<string, string> = { info: 'blue', success: 'green', warn: 'orange', error: 'red' };
+  return <Table rowKey="id" size="small" dataSource={logs} pagination={false} scroll={{ x: 640 }} columns={[
+    { title: '时间', dataIndex: 'time', width: 90, render: shortTime },
+    { title: '模块', dataIndex: 'scope', width: 100 },
+    { title: '级别', dataIndex: 'level', width: 75, render: v => <Tag color={colors[v]}>{({ info: '信息', success: '成功', warn: '提醒', error: '错误' } as Record<string, string>)[v]}</Tag> },
+    { title: '内容', dataIndex: 'message', render: v => <Typography.Text style={{ overflowWrap: 'anywhere' }}>{v}</Typography.Text> },
+  ]}/>;
+}
 
 function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => void; navigate: (p: Page) => void }) {
   const { message } = AntApp.useApp(); const [logs, setLogs] = useState<string[]>(['小智本地刷写工具已就绪。', '连接设备后，系统会识别芯片并备份 NVS 配置。']); const [chip, setChip] = useState<ChipInfo>();
@@ -116,20 +138,34 @@ function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => voi
   async function run(action: () => Promise<void>) { setBusy(true); try { await action(); } catch (e) { const text = e instanceof Error ? e.message : String(e); setLogs(l => [...l, `[错误] ${text}`]); setStage('操作未完成'); message.error(text); } finally { setBusy(false); refresh(); } }
   async function flash() { const since = Date.now(); const id = await flasher.current!.flash({ transport, ssid: ssid || undefined, password: ssid ? password : undefined, firmware: mode === 'firmware' ? firmware : undefined }); setPassword(''); setWaiting({ id, since }); }
   const supported = 'serial' in navigator && window.isSecureContext;
-  return <>
-    {!supported && <Alert type="warning" showIcon title="当前浏览器没有 Web Serial 权限" description="请使用电脑上的 Chrome 打开 http://localhost:5178 或 http://localhost:18080。" style={{ marginBottom: 20 }}/>}
-    <div className="flash-layout"><div><Panel title="连接与刷写" subtitle="适配 WHA103 · ESP32-C3 · 16MB Flash" extra={<Tag color="blue">Web Serial</Tag>}>
-      <div className="step-block"><div className="step-label"><span>1</span><h4>选择设备串口</h4></div><div className={`serial-device ${chip ? 'has-device' : ''}`}><span className="serial-chip"><UsbOutlined/></span><div className="grow"><b>{chip?.name || '通过 USB 连接小智'}</b><small>{chip ? `${chip.mac} · ${chip.flashSize / 1048576} MB` : '支持 Chrome / Edge，无需安装串口客户端'}</small></div>{chip ? <Button disabled={busy} onClick={() => run(async () => { await flasher.current!.disconnect(); setChip(undefined); setStage('等待连接串口'); })} icon={<DisconnectOutlined/>}>释放串口</Button> : <Button type="primary" disabled={!supported} loading={busy} icon={<UsbOutlined/>} onClick={() => run(async () => { setChip(await flasher.current!.connect()); })}>选择串口</Button>}</div><p className="field-help">识别芯片会重启设备并进入下载模式。离开时会释放串口。</p></div>
-      <div className="step-block"><div className="step-label"><span>2</span><h4>选择刷写内容</h4></div><Segmented block value={mode} onChange={v => setMode(String(v))} disabled={busy} options={[{ label: '保留固件 · 配置本地连接', value: 'config' }, { label: '刷写完整固件', value: 'firmware' }]}/>
-      {mode === 'config' ? <div className="inline-info"><SafetyCertificateOutlined/><span>只更新连接配置，保留原有屏幕、麦克风和音频驱动。不会擦除整个 Flash。</span></div> : <div className="firmware-upload"><Upload accept=".bin" maxCount={1} beforeUpload={file => { setFirmware(file); return false; }} onRemove={() => setFirmware(undefined)}><Button icon={<CloudUploadOutlined/>}>选择 WHA103 完整合并固件 .bin</Button></Upload><p className="field-help">需要与你的板型对应、从 0x0 开始的合并固件。项目不附带未经验证的 WHA103 固件。</p></div>}
-      </div>
-      <div className="step-block"><div className="step-label"><span>3</span><h4>配置本地环境</h4></div><Form layout="vertical"><Form.Item label="设备连接协议"><Segmented block value={transport} disabled={busy} onChange={v => setTransport(v as 'websocket' | 'mqtt')} options={[{ label: 'WebSocket', value: 'websocket' }, { label: 'MQTT + UDP', value: 'mqtt' }]}/></Form.Item><div className="address-preview"><span>OTA 服务地址</span><code>{data.connection.otaUrl}</code><WifiOutlined/></div><div className="form-grid"><Form.Item label="Wi-Fi 名称（可选）"><Input autoComplete="off" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="留空，保留设备已有 Wi-Fi" maxLength={32}/></Form.Item><Form.Item label="Wi-Fi 密码"><Input.Password autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="使用 2.4GHz Wi-Fi" disabled={!ssid} maxLength={64}/></Form.Item></div></Form><p className="field-help">地址必须能从设备的 Wi-Fi 网络访问。请保持这台电脑和小智处于同一局域网。</p></div>
-      <div className="flash-actions"><Button type="primary" size="large" icon={<ThunderboltOutlined/>} disabled={!chip || (mode === 'firmware' && !firmware) || !!waiting || monitoring} loading={busy} onClick={() => run(flash)}>{mode === 'config' ? '写入本地配置并重启' : '刷写固件并连接本地'}</Button><span>写入前自动下载 NVS 备份</span></div>
-    </Panel></div><div className="flash-side"><Panel title="刷写进度" subtitle={stage}><Progress percent={progress} strokeColor="#3459d5" status={busy || waiting ? 'active' : 'normal'}/><div className="flash-checks"><div><CheckCircleFilled/> 读取芯片与 Flash 信息</div><div><SafetyCertificateOutlined/> 备份原有 NVS 配置</div><div><CheckOutlined/> MD5 与配置回读校验</div><div><LinkOutlined/> 重启后等待真实 OTA 接入</div></div>{progress === 100 && <Button block type="primary" onClick={() => navigate('devices')}>前往设备与对话 <ArrowRightOutlined/></Button>}</Panel>
-      <section className="terminal"><div className="terminal-head"><span><CodeOutlined/> 串口输出</span><Space><button onClick={() => setLogs([])}>清空</button><button disabled={busy || !supported} onClick={async () => { if (monitoring) { await flasher.current!.disconnect(); setMonitoring(false); setChip(undefined); } else { setMonitoring(true); setChip(undefined); try { await flasher.current!.readLogs(); } catch (e) { message.error(String(e)); } finally { setMonitoring(false); } } }}>{monitoring ? '停止监听' : '监听日志'}</button></Space></div><pre>{logs.map((l, i) => <span key={i}>{l}{l.endsWith('\n') ? '' : '\n'}</span>)}<div ref={logBottom}/></pre></section>
-      <div className="help-card"><h4><ToolOutlined/> 已有可用固件？</h4><p>也可以在小智配网页面的高级选项填写本地 OTA 地址。先在设备页登记 MAC，再保存地址并重启。</p><Button type="link" onClick={() => navigate('devices')}>前往登记设备 <ArrowRightOutlined/></Button></div>
-    </div></div>
-  </>;
+  return <Flex vertical gap={12}>
+    {!supported && <Alert type="warning" showIcon title="请使用 Chrome / Edge 通过 localhost 访问串口"/>}
+    <Row gutter={[12, 12]}>
+      <Col xs={24} lg={14}><Panel title="串口刷写" extra={<Tag>WHA103 / ESP32-C3</Tag>}>
+        <Flex vertical gap={12}>
+          <Flex wrap align="center" justify="space-between" gap={8}>
+            <Typography.Text>{chip ? `${chip.name} · ${chip.mac} · ${chip.flashSize / 1048576} MB` : '未连接串口'}</Typography.Text>
+            {chip ? <Button disabled={busy} onClick={() => run(async () => { await flasher.current!.disconnect(); setChip(undefined); setStage('等待连接串口'); })} icon={<DisconnectOutlined/>}>释放串口</Button> : <Button type="primary" disabled={!supported || monitoring} loading={busy} icon={<UsbOutlined/>} onClick={() => run(async () => { setChip(await flasher.current!.connect()); })}>选择串口</Button>}
+          </Flex>
+          <Form layout="vertical" disabled={busy}>
+            <Form.Item label="刷写内容" tooltip="选择串口会重启设备并进入下载模式。写入前自动备份 NVS。"><Select value={mode} onChange={setMode} options={[{ label: '仅配置本地连接', value: 'config' }, { label: '完整固件', value: 'firmware' }]}/></Form.Item>
+            {mode === 'firmware' && <Form.Item label="固件" extra="选择匹配 WHA103、从 0x0 开始的合并固件。"><Upload accept=".bin" maxCount={1} beforeUpload={file => { setFirmware(file); return false; }} onRemove={() => setFirmware(undefined)}><Button icon={<UploadOutlined/>}>选择 .bin 文件</Button></Upload></Form.Item>}
+            <Form.Item label="连接协议"><Select value={transport} onChange={setTransport} options={[{ label: 'WebSocket', value: 'websocket' }, { label: 'MQTT + UDP', value: 'mqtt' }]}/></Form.Item>
+            <Form.Item label="OTA 地址" tooltip="设备与电脑需在同一局域网。"><Typography.Text copyable>{data.connection.otaUrl}</Typography.Text></Form.Item>
+            <Columns><Form.Item label="Wi-Fi 名称"><Input autoComplete="off" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="留空保留已有网络" maxLength={32}/></Form.Item><Form.Item label="Wi-Fi 密码"><Input.Password autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="2.4GHz Wi-Fi" disabled={!ssid || busy} maxLength={64}/></Form.Item></Columns>
+          </Form>
+          <Button type="primary" icon={<ThunderboltOutlined/>} disabled={!chip || (mode === 'firmware' && !firmware) || !!waiting || monitoring} loading={busy} onClick={() => run(flash)}>{mode === 'config' ? '写入配置并重启' : '刷写固件并重启'}</Button>
+          <Typography.Text type="secondary">写入前自动备份 NVS</Typography.Text>
+        </Flex>
+      </Panel></Col>
+      <Col xs={24} lg={10}><Flex vertical gap={12}>
+        <Panel title="进度"><Typography.Text>{stage}</Typography.Text><Progress percent={progress} status={busy || waiting ? 'active' : 'normal'}/>{progress === 100 && <Button onClick={() => navigate('devices')}>设备与对话</Button>}</Panel>
+        <Panel title="串口日志" extra={<Space><Button onClick={() => setLogs([])}>清空</Button><Button disabled={busy || !!waiting || !supported} onClick={async () => { if (monitoring) { await flasher.current!.disconnect(); setMonitoring(false); setChip(undefined); } else { setMonitoring(true); setChip(undefined); try { await flasher.current!.readLogs(); } catch (e) { message.error(String(e)); } finally { setMonitoring(false); } } }}>{monitoring ? '停止监听' : '监听日志'}</Button></Space>}>
+          <pre className="console-output">{logs.join('\n')}<span ref={logBottom}/></pre>
+        </Panel>
+      </Flex></Col>
+    </Row>
+  </Flex>;
 }
 
 function Devices({ data, refresh }: { data: Snapshot; refresh: () => void }) {
@@ -137,18 +173,37 @@ function Devices({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   const id = selected || data.devices[0]?.id; const device = data.devices.find(d => d.id === id); const chatEnd = useRef<HTMLDivElement>(null);
   const messages = data.messages.filter(m => m.deviceId === id); useEffect(() => { chatEnd.current?.scrollIntoView({ block: 'nearest' }); }, [data.messages]);
   async function action(kind: string) { if (!id) return; setBusy(true); try { await post(`/devices/${encodeURIComponent(id)}/${kind}`, { text }); if (kind !== 'abort') setText(''); message.success(kind === 'abort' ? '已停止播报' : '请求已提交，结果见对话和日志'); } catch (e) { message.error(String(e)); } finally { setBusy(false); } }
-  return <><div className="devices-layout"><Panel title="设备列表" extra={<Button type="text" icon={<PlusOutlined/>} onClick={() => setRegister(true)} aria-label="登记设备"/>}>
-    {data.devices.length ? data.devices.map(d => <button key={d.id} className={`device-select ${id === d.id ? 'active' : ''}`} onClick={() => { setSelected(d.id); setTools([]); }}><span className="device-icon"><RobotOutlined/></span><div className="grow"><b>{d.name}</b><small>{d.board || '未知板型'}</small><code>{d.id}</code></div><i className={`device-dot ${d.online ? 'online' : ''}`}/></button>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚未登记设备"><Button onClick={() => setRegister(true)}>登记 MAC 地址</Button></Empty>}
-    <div className="list-note">WebSocket 设备通常在唤醒后上线。主动下发音频需要设备保持音频通道连接。</div>
-    </Panel><div><Panel title={<span>{device?.name || '设备对话'} {device && <Status online={device.online} text={states[device.state] || device.state}/>}</span>} extra={device && <Tag>{device.transport === 'mqtt' ? 'MQTT + UDP' : 'WebSocket'}</Tag>}>
-      {device && <div className="device-meta"><span>固件 <b>{device.firmware || '待上报'}</b></span><span>音频上行 <b>{device.inputFrames} 帧</b></span><span>音频下行 <b>{device.outputFrames} 帧</b></span>{device.speaker && <span>说话人 <b>{device.speaker}</b></span>}</div>}
-      <div className="chat-list">{messages.length ? messages.map(m => <div key={m.id} className={`chat-message ${m.role === 'user' ? 'user' : ''}`}><span className="chat-avatar">{m.role === 'user' ? '我' : <RobotOutlined/>}</span><div><div className="chat-label">{m.role === 'user' ? m.speaker || '用户' : m.role === 'broadcast' ? '主动播报' : '小智'}<time>{shortTime(m.time)}</time></div><p>{m.text}</p></div></div>) : <div className="chat-empty"><SoundOutlined/><h4>让对话发生在本地</h4><p>{device?.online ? '向设备发送文字，或直接对小智说话。' : '先接入设备并唤醒小智，在线后即可测试。'}</p></div>}<div ref={chatEnd}/></div>
-      <div className="chat-composer"><Input.TextArea value={text} onChange={e => setText(e.target.value)} placeholder="输入对话内容，或输入一段需要设备朗读的文字…" autoSize={{ minRows: 2, maxRows: 5 }} maxLength={4000}/><div className="composer-actions"><Upload accept="audio/*" showUploadList={false} beforeUpload={file => { void upload(`/devices/${encodeURIComponent(id!)}/audio`, file).then(() => message.success('音频已提交')).catch(e => message.error(String(e))); return false; }} disabled={!device?.online}><Button disabled={!device?.online} type="text" icon={<UploadOutlined/>}>上传音频</Button></Upload><Space wrap><Button disabled={!device?.online} icon={<StopOutlined/>} onClick={() => action('abort')}>停止</Button><Button disabled={!device?.online || !text.trim()} loading={busy} icon={<SoundOutlined/>} onClick={() => action('speak')}>直接播报</Button><Button type="primary" disabled={!device?.online || !text.trim()} loading={busy} icon={<SendOutlined/>} onClick={() => action('chat')}>发送对话</Button></Space></div></div>
-    </Panel><Panel title="设备工具" subtitle="通过设备 MCP 协议发现并调用" extra={<Button disabled={!device?.online} icon={<ReloadOutlined/>} onClick={async () => { try { setTools((await api(`/devices/${encodeURIComponent(id!)}/tools`)).tools); } catch (e) { message.error(String(e)); } }}>读取工具</Button>}>
-      <div className="tool-form"><Select placeholder="选择设备声明的工具" value={tool || undefined} options={tools.map(t => ({ label: t.name, value: t.name }))} onChange={setTool} style={{ width: '100%' }}/><Input.TextArea value={args} onChange={e => setArgs(e.target.value)} rows={3} placeholder='参数 JSON，例如 {"volume": 50}'/><Button disabled={!device?.online || !tool} icon={<PlayCircleOutlined/>} onClick={async () => { try { setResult(JSON.stringify(await post(`/devices/${encodeURIComponent(id!)}/call`, { name: tool, arguments: JSON.parse(args) }), null, 2)); } catch (e) { message.error(String(e)); } }}>调用工具</Button>{result && <pre className="json-result">{result}</pre>}</div>
-    </Panel></div></div>
-    <Modal title="登记已有设备" open={register} onCancel={() => setRegister(false)} onOk={async () => { try { await post('/provision', { id: mac.trim().toLowerCase(), transport: protocol, board: 'wha103' }); setRegister(false); refresh(); message.success('已登记，请把本地 OTA 地址填入设备配网页面'); } catch (e) { message.error(String(e)); } }}><p className="modal-help">填写设备 MAC 地址后，在设备配网页面把 OTA 地址改为：</p><div className="address-preview"><code>{data.connection.otaUrl}</code></div><Form layout="vertical"><Form.Item label="MAC 地址"><Input value={mac} onChange={e => setMac(e.target.value)} placeholder="aa:bb:cc:dd:ee:ff"/></Form.Item><Form.Item label="连接协议"><Select value={protocol} onChange={setProtocol} options={[{ label: 'WebSocket', value: 'websocket' }, { label: 'MQTT + UDP', value: 'mqtt' }]}/></Form.Item></Form></Modal>
-  </>;
+  return <Row gutter={[12, 12]}>
+    <Col xs={24} lg={6}><Panel title="设备" extra={<Button icon={<PlusOutlined/>} onClick={() => setRegister(true)}>登记</Button>}>
+      {data.devices.length ? <Menu mode="inline" selectedKeys={id ? [id] : []} onClick={({ key }) => { setSelected(key); setTools([]); setTool(''); setResult(''); }} items={data.devices.map(d => ({ key: d.id, label: <Space><Badge status={d.online ? 'success' : 'default'}/>{d.name}</Space>, title: `${d.board} · ${d.id}` }))}/> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无设备"/>}
+      {device && <Descriptions size="small" column={1} style={{ marginTop: 12 }} items={[
+        { key: 'mac', label: 'MAC', children: device.id }, { key: 'board', label: '板型', children: device.board || '未知' },
+        { key: 'firmware', label: '固件', children: device.firmware || '待上报' },
+        { key: 'frames', label: '音频帧', children: `↑ ${device.inputFrames} / ↓ ${device.outputFrames}` },
+        ...(device.speaker ? [{ key: 'speaker', label: '说话人', children: device.speaker }] : []),
+      ]}/>}
+    </Panel></Col>
+    <Col xs={24} lg={18}><Flex vertical gap={12}>
+      <Panel title={<Space>{device?.name || '设备对话'}{device && <Status online={device.online} text={states[device.state] || device.state}/>}</Space>} extra={device && <Tag>{device.transport === 'mqtt' ? 'MQTT + UDP' : 'WebSocket'}</Tag>}>
+        <Flex vertical gap={12}>
+          <div className="chat-history">{messages.length ? messages.map(m => <Card size="small" key={m.id} style={{ marginBottom: 8 }}>
+            <Flex vertical gap={4}><Space><Typography.Text strong>{m.role === 'user' ? m.speaker || '用户' : m.role === 'broadcast' ? '播报' : '小智'}</Typography.Text><Typography.Text type="secondary">{shortTime(m.time)}</Typography.Text></Space><Typography.Text style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</Typography.Text></Flex>
+          </Card>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={device?.online ? '暂无对话' : '请先唤醒设备'}/>}<div ref={chatEnd}/></div>
+          <Input.TextArea value={text} onChange={e => setText(e.target.value)} placeholder="输入对话或播报内容" autoSize={{ minRows: 2, maxRows: 5 }} maxLength={4000}/>
+          <Flex justify="space-between" wrap gap={8}>
+            <Upload accept="audio/*" showUploadList={false} beforeUpload={file => { void upload(`/devices/${encodeURIComponent(id!)}/audio`, file).then(() => message.success('音频已提交')).catch(e => message.error(String(e))); return false; }} disabled={!device?.online}><Button disabled={!device?.online} icon={<UploadOutlined/>}>上传音频</Button></Upload>
+            <Space wrap><Button disabled={!device?.online} icon={<StopOutlined/>} onClick={() => action('abort')}>停止</Button><Button disabled={!device?.online || !text.trim()} loading={busy} icon={<SoundOutlined/>} onClick={() => action('speak')}>播报</Button><Button type="primary" disabled={!device?.online || !text.trim()} loading={busy} icon={<SendOutlined/>} onClick={() => action('chat')}>发送</Button></Space>
+          </Flex>
+        </Flex>
+      </Panel>
+      <Panel title="设备工具" extra={<Button disabled={!device?.online} icon={<ReloadOutlined/>} onClick={async () => { try { setTools((await api(`/devices/${encodeURIComponent(id!)}/tools`)).tools); } catch (e) { message.error(String(e)); } }}>读取工具</Button>}>
+        <Flex vertical gap={8}><Select placeholder="选择工具" value={tool || undefined} options={tools.map(t => ({ label: t.name, value: t.name }))} onChange={setTool}/><Input.TextArea value={args} onChange={e => setArgs(e.target.value)} rows={2} placeholder="参数 JSON"/><Button style={{ alignSelf: 'flex-start' }} disabled={!device?.online || !tool} icon={<PlayCircleOutlined/>} onClick={async () => { try { setResult(JSON.stringify(await post(`/devices/${encodeURIComponent(id!)}/call`, { name: tool, arguments: JSON.parse(args) }), null, 2)); } catch (e) { message.error(String(e)); } }}>调用</Button>{result && <pre className="console-output">{result}</pre>}</Flex>
+      </Panel>
+    </Flex></Col>
+    <Modal title="登记设备" open={register} onCancel={() => setRegister(false)} onOk={async () => { try { await post('/provision', { id: mac.trim().toLowerCase(), transport: protocol, board: 'wha103' }); setRegister(false); refresh(); message.success('已登记，请在设备配网页面设置 OTA 地址'); } catch (e) { message.error(String(e)); } }}>
+      <Form layout="vertical"><Form.Item label="设备 OTA 地址"><Typography.Text copyable>{data.connection.otaUrl}</Typography.Text></Form.Item><Form.Item label="MAC 地址"><Input value={mac} onChange={e => setMac(e.target.value)} placeholder="aa:bb:cc:dd:ee:ff"/></Form.Item><Form.Item label="协议"><Select value={protocol} onChange={setProtocol} options={[{ label: 'WebSocket', value: 'websocket' }, { label: 'MQTT + UDP', value: 'mqtt' }]}/></Form.Item></Form>
+    </Modal>
+  </Row>;
 }
 
 function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) {
@@ -157,38 +212,99 @@ function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) 
   useEffect(() => () => { audio.current?.pause(); if (audioUrl.current) URL.revokeObjectURL(audioUrl.current); }, []);
   async function save() { const values = await form.validateFields(); await api('/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) }); refresh(); }
   async function test(kind: string) { setTesting(kind); try { await save(); if (kind === 'llm') { const r = await post('/ai/test'); setTestResult(`${r.text} · ${r.elapsed}ms`); message.success('模型连接成功'); } else { const r = await fetch('/api/tts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '你好，我是小智。现在连接的是你的本地环境。' }) }); if (!r.ok) throw new Error((await r.json()).error); audio.current?.pause(); if (audioUrl.current) URL.revokeObjectURL(audioUrl.current); audioUrl.current = URL.createObjectURL(await r.blob()); audio.current = new Audio(audioUrl.current); await audio.current.play(); message.success('语音合成成功，正在浏览器试听'); } } catch (e) { message.error(String(e)); } finally { setTesting(''); } }
-  return <Form form={form} layout="vertical" initialValues={data.settings} onFinish={async () => { setSaving(true); try { await save(); message.success('设置已保存，下一次请求立即生效'); } catch (e) { message.error(String(e)); } finally { setSaving(false); } }}>
-    <div className="settings-top"><Alert type="info" showIcon title="配置只保存在本机" description="密钥保存在本地数据目录，前端只读取掩码。使用云端模型或 Edge TTS 时，请求会发送给你选择的服务商。"/><Button type="primary" htmlType="submit" loading={saving} icon={<CheckOutlined/>}>保存全部设置</Button></div>
-    <Panel title={<><GlobalOutlined/> 本地接入地址</>} subtitle="设备必须能访问这个局域网地址"><div className="form-grid"><Form.Item name="publicHost" label="本机局域网 IP / 主机名" rules={[{ required: true }]}><Input placeholder="192.168.1.100"/></Form.Item><Form.Item name="defaultTransport" label="新设备默认协议"><Select options={[{ value: 'websocket', label: 'WebSocket' }, { value: 'mqtt', label: 'MQTT + UDP' }]}/></Form.Item></div></Panel>
-    <Panel title={<><ExperimentOutlined/> 大模型</>} subtitle="支持 OpenAI 兼容网关，可以填写你的 UAT AI 网关" extra={<Button loading={testing === 'llm'} onClick={() => test('llm')} icon={<LinkOutlined/>}>保存并测试连接</Button>}><div className="form-grid"><Form.Item name={['llm', 'baseUrl']} label="API Base URL" rules={[{ required: true }]}><Input/></Form.Item><Form.Item name={['llm', 'model']} label="模型名称" rules={[{ required: true }]}><Input/></Form.Item></div><Form.Item name={['llm', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password" placeholder="填写服务端密钥"/></Form.Item><Form.Item name={['llm', 'systemPrompt']} label="小智的角色设定"><Input.TextArea rows={3}/></Form.Item>{testResult && <div className="test-result"><CheckCircleFilled/>{testResult}</div>}</Panel>
-    <div className="two-columns"><Panel title={<><AudioOutlined/> 语音识别</>} subtitle="设备上行音频 → 转为文字"><Form.Item name={['asr', 'type']} label="识别接口"><Select options={[{ label: 'Qwen ASR · 多模态兼容接口', value: 'qwen' }, { label: 'OpenAI / Whisper 兼容接口', value: 'openai' }]}/></Form.Item><Form.Item name={['asr', 'baseUrl']} label="API Base URL"><Input/></Form.Item><Form.Item name={['asr', 'model']} label="模型名称"><Input/></Form.Item><Form.Item name={['asr', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item><Upload accept="audio/*" showUploadList={false} beforeUpload={file => { setTesting('asr'); void save().then(() => upload('/asr/test', file)).then(r => { setTestResult(`语音识别：${r.text || '未识别到文字'}`); message.success(r.text || '未识别到文字'); }).catch(e => message.error(String(e))).finally(() => setTesting('')); return false; }}><Button icon={<UploadOutlined/>} loading={testing === 'asr'}>保存并上传音频测试</Button></Upload></Panel>
-    <Panel title={<><SoundOutlined/> 语音合成</>} subtitle="模型回答 → 设备 Opus 音频"><Form.Item name={['tts', 'type']} label="合成服务"><Select options={[{ label: 'Edge TTS · 微软在线服务', value: 'edge' }, { label: 'OpenAI 兼容语音合成', value: 'openai' }]}/></Form.Item><Form.Item name={['tts', 'voice']} label="音色 / Voice"><Input placeholder="zh-CN-XiaoxiaoNeural"/></Form.Item><Form.Item name={['tts', 'baseUrl']} label="兼容 API Base URL（Edge 不使用）"><Input/></Form.Item><div className="form-grid"><Form.Item name={['tts', 'model']} label="模型名称"><Input/></Form.Item><Form.Item name={['tts', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item></div><Button icon={<PlayCircleOutlined/>} loading={testing === 'tts'} onClick={() => test('tts')}>保存并试听</Button>{!data.health.ffmpeg && <Alert type="warning" title="未找到 FFmpeg，请安装后再向设备下发音频" style={{ marginTop: 14 }}/>}</Panel></div>
-    <Panel title="唤醒与语音输入" subtitle="设备待机唤醒由固件中的唤醒模型决定"><Alert type="info" showIcon title="这里的设置不会修改设备待机唤醒词" description="请先用设备原有唤醒词或按钮唤醒。修改服务器文字前缀，不能让待机设备识别新的唤醒词。" style={{ marginBottom: 20 }}/><Form.Item name="wakeGreeting" label="设备唤醒后的回复" extra="收到设备唤醒事件后播报，无需调用大模型。留空关闭回复；按按钮进入聆听时不播报。" rules={[{ max: 200, message: '唤醒回复最多 200 个字符' }]}><Input maxLength={200} allowClear placeholder="例如：我在，请说。"/></Form.Item><Form.Item name="wakePrefix" label="语音前缀过滤（可选）" extra="留空时所有语音均可对话。填写后，每轮语音都需以此前缀开头，例如“小智，今天天气怎么样”；前缀及其后的标点会被移除，仅说前缀不会触发回复。仅处理设备已上传的音频，设备待机唤醒仍由固件控制。" rules={[{ max: 80, message: '语音前缀最多 80 个字符' }]}><Input maxLength={80} allowClear placeholder="例如：小智"/></Form.Item></Panel>
-    <Panel title="语音断句" subtitle="本地音量检测，用于自动结束一轮输入"><div className="form-grid"><Form.Item name={['vad', 'threshold']} label="音量阈值（RMS）"><InputNumber min={0.001} max={1} step={0.005}/></Form.Item><Form.Item name={['vad', 'silenceMs']} label="静音断句时长（毫秒）"><InputNumber min={300} max={5000} step={100}/></Form.Item></div></Panel>
+  return <Form form={form} layout="vertical" initialValues={data.settings} onFinish={async () => { setSaving(true); try { await save(); message.success('设置已保存'); } catch (e) { message.error(String(e)); } finally { setSaving(false); } }}>
+    <Flex vertical gap={12}>
+      <Flex justify="flex-end"><Button type="primary" htmlType="submit" loading={saving} icon={<CheckOutlined/>}>保存设置</Button></Flex>
+      <Columns>
+        <Panel title="本地接入"><Columns><Form.Item name="publicHost" label="局域网 IP / 主机名" rules={[{ required: true }]}><Input placeholder="192.168.1.100"/></Form.Item><Form.Item name="defaultTransport" label="默认协议"><Select options={[{ value: 'websocket', label: 'WebSocket' }, { value: 'mqtt', label: 'MQTT + UDP' }]}/></Form.Item></Columns></Panel>
+        <Panel title="唤醒与断句"><Columns>
+          <Form.Item name="wakeGreeting" label="唤醒回复" tooltip="设备上报唤醒事件后播报，留空关闭。" rules={[{ max: 200 }]}><Input maxLength={200} allowClear/></Form.Item>
+          <Form.Item name="wakePrefix" label="语音前缀过滤" tooltip="每轮语音需以此前缀开头，留空不限。不修改设备待机唤醒词。" rules={[{ max: 80 }]}><Input maxLength={80} allowClear placeholder="留空不限制"/></Form.Item>
+          <Form.Item name={['vad', 'threshold']} label="音量阈值（RMS）"><InputNumber min={0.001} max={1} step={0.005} style={{ width: '100%' }}/></Form.Item>
+          <Form.Item name={['vad', 'silenceMs']} label="静音断句（ms）"><InputNumber min={300} max={5000} step={100} style={{ width: '100%' }}/></Form.Item>
+        </Columns></Panel>
+      </Columns>
+      <Columns count={3}>
+        <Panel title="大模型" extra={<Button loading={testing === 'llm'} onClick={() => test('llm')} icon={<LinkOutlined/>}>测试</Button>}>
+          <Form.Item name={['llm', 'baseUrl']} label="API Base URL" rules={[{ required: true }]}><Input/></Form.Item>
+          <Form.Item name={['llm', 'model']} label="模型" rules={[{ required: true }]}><Input/></Form.Item>
+          <Form.Item name={['llm', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item>
+          <Form.Item name={['llm', 'systemPrompt']} label="角色设定"><Input.TextArea rows={3}/></Form.Item>
+        </Panel>
+        <Panel title="语音识别">
+          <Form.Item name={['asr', 'type']} label="服务"><Select options={[{ label: 'Qwen ASR', value: 'qwen' }, { label: 'OpenAI / Whisper', value: 'openai' }]}/></Form.Item>
+          <Form.Item name={['asr', 'baseUrl']} label="API Base URL"><Input/></Form.Item>
+          <Form.Item name={['asr', 'model']} label="模型"><Input/></Form.Item>
+          <Form.Item name={['asr', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item>
+          <Upload accept="audio/*" showUploadList={false} beforeUpload={file => { setTesting('asr'); void save().then(() => upload('/asr/test', file)).then(r => { setTestResult(`语音识别：${r.text || '未识别到文字'}`); message.success(r.text || '未识别到文字'); }).catch(e => message.error(String(e))).finally(() => setTesting('')); return false; }}><Button icon={<UploadOutlined/>} loading={testing === 'asr'}>上传测试</Button></Upload>
+        </Panel>
+        <Panel title="语音合成" extra={<Button icon={<PlayCircleOutlined/>} loading={testing === 'tts'} onClick={() => test('tts')}>试听</Button>}>
+          <Form.Item name={['tts', 'type']} label="服务"><Select options={[{ label: 'Edge TTS', value: 'edge' }, { label: 'OpenAI 兼容', value: 'openai' }]}/></Form.Item>
+          <Form.Item name={['tts', 'voice']} label="音色"><Input placeholder="zh-CN-XiaoxiaoNeural"/></Form.Item>
+          <Form.Item name={['tts', 'baseUrl']} label="API Base URL" tooltip="Edge TTS 不使用此项。"><Input/></Form.Item>
+          <Form.Item name={['tts', 'model']} label="模型"><Input/></Form.Item>
+          <Form.Item name={['tts', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item>
+          {!data.health.ffmpeg && <Alert type="warning" title="请安装 FFmpeg"/>}
+        </Panel>
+      </Columns>
+      {testResult && <Alert type="success" title={testResult} closable onClose={() => setTestResult('')}/>}
+    </Flex>
     <Form.Item name={['voiceprint', 'mode']} hidden><Input/></Form.Item><Form.Item name={['voiceprint', 'enabled']} hidden valuePropName="checked"><Switch/></Form.Item><Form.Item name={['voiceprint', 'baseUrl']} hidden><Input/></Form.Item><Form.Item name={['voiceprint', 'apiKey']} hidden><Input/></Form.Item><Form.Item name={['voiceprint', 'threshold']} hidden><InputNumber/></Form.Item>
   </Form>;
 }
 
-function Voice({ data, refresh, navigate }: { data: Snapshot; refresh: () => void; navigate: (p: Page) => void }) {
+function Voice({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   const [form] = Form.useForm(); const { message } = AntApp.useApp(); const [modal, setModal] = useState(false); const [name, setName] = useState(''); const [description, setDescription] = useState(''); const [busy, setBusy] = useState('');
   useEffect(() => { form.setFieldsValue(data.settings.voiceprint); }, [JSON.stringify(data.settings.voiceprint)]);
-  return <><div className="two-columns"><Panel title="声纹服务" subtitle="本地 ONNX 声纹模型，或外部兼容服务" extra={<Tag color={data.health.voiceprintModel ? "green" : "default"}>{data.health.voiceprintModel ? "本地模型已就绪" : "本地模型待安装"}</Tag>}><Form form={form} layout="vertical" initialValues={data.settings.voiceprint} onFinish={async values => { try { await api('/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...data.settings, voiceprint: values }) }); refresh(); message.success('声纹设置已保存'); } catch (e) { message.error(String(e)); } }}><Form.Item name="mode" label="声纹运行方式"><Select options={[{label:"本地模型 · sherpa-onnx",value:"local"},{label:"外部声纹服务",value:"remote"}]}/></Form.Item><Form.Item name="enabled" label="在对话中识别说话人" valuePropName="checked"><Switch/></Form.Item><Form.Item name="baseUrl" label="外部服务地址（本地模式不使用）"><Input placeholder="http://127.0.0.1:8005"/></Form.Item><Form.Item name="apiKey" label="服务密钥"><Input.Password autoComplete="new-password"/></Form.Item><Form.Item name="threshold" label="识别相似度阈值"><Slider min={0} max={1} step={0.05}/></Form.Item><Button type="primary" htmlType="submit">保存声纹设置</Button></Form></Panel><div className="voice-explainer"><div className="voice-symbol"><AudioOutlined/><div>{Array.from({ length: 19 }, (_, i) => <i key={i} style={{ height: `${14 + Math.sin(i * 1.8) ** 2 * 40}px` }}/>)}</div></div><h2>听出是谁，<br/>让对话更熟悉。</h2><p>本地模式使用独立 Worker 提取声纹，音频无需发往声纹云服务。先运行 bun run setup:voiceprint 安装模型，再登记清晰的人声录音。</p><ul><li>准备至少 3 秒清晰的单人音频。</li><li>每个人单独登记，使用相同的服务。</li><li>未达到阈值时不标记身份。</li></ul><Button type="link" onClick={() => navigate('logs')}>查看识别结果与错误日志 <ArrowRightOutlined/></Button></div></div>
-    <Panel title="说话人" subtitle="音频经声纹服务注册成功后才会标记为已登记" extra={<Button type="primary" icon={<PlusOutlined/>} onClick={() => setModal(true)}>添加说话人</Button>}><Table rowKey="id" dataSource={data.speakers} pagination={false} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="添加一个说话人，再上传清晰的录音样本"/> }} columns={[{ title: '说话人', dataIndex: 'name', render: (v, r) => <div><b>{v}</b><small className="table-sub">{r.id}</small></div> }, { title: '备注', dataIndex: 'description' }, { title: '状态', dataIndex: 'enrolled', render: v => <Tag color={v ? 'green' : 'default'}>{v ? '已登记音频' : '待上传样本'}</Tag> }, { title: '操作', render: (_, r) => <Space><Upload accept="audio/*" showUploadList={false} beforeUpload={file => { setBusy(r.id); void upload(`/speakers/${r.id}/enroll`, file).then(() => { refresh(); message.success('声纹样本注册成功'); }).catch(e => message.error(String(e))).finally(() => setBusy('')); return false; }}><Button loading={busy === r.id} icon={<UploadOutlined/>}>上传样本</Button></Upload><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => api(`/speakers/${r.id}`, { method: 'DELETE' }).then(refresh).catch(e => message.error(String(e)))} aria-label={`移除${r.name}`}/></Space> } ]}/></Panel>
-    <Modal title="添加说话人" open={modal} onCancel={() => setModal(false)} onOk={async () => { try { await post('/speakers', { name, description }); setModal(false); setName(''); setDescription(''); refresh(); } catch (e) { message.error(String(e)); } }}><Form layout="vertical"><Form.Item label="称呼"><Input value={name} onChange={e => setName(e.target.value)} placeholder="例如：小金"/></Form.Item><Form.Item label="备注"><Input value={description} onChange={e => setDescription(e.target.value)} placeholder="可选"/></Form.Item></Form></Modal>
-  </>;
+  const mode = Form.useWatch('mode', form) || data.settings.voiceprint.mode;
+  return <Row gutter={[12, 12]}>
+    <Col xs={24} lg={8}><Panel title="声纹设置" extra={<Tag color={data.health.voiceprintModel ? 'green' : 'default'}>{data.health.voiceprintModel ? '模型就绪' : '模型未安装'}</Tag>}>
+      <Form form={form} layout="vertical" initialValues={data.settings.voiceprint} onFinish={async values => { try { await api('/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...data.settings, voiceprint: values }) }); refresh(); message.success('声纹设置已保存'); } catch (e) { message.error(String(e)); } }}>
+        <Form.Item name="enabled" label="识别说话人" valuePropName="checked"><Switch/></Form.Item>
+        <Form.Item name="mode" label="运行方式"><Select options={[{ label: '本地模型', value: 'local' }, { label: '外部服务', value: 'remote' }]}/></Form.Item>
+        <Form.Item name="baseUrl" label="服务地址" hidden={mode === 'local'}><Input placeholder="http://127.0.0.1:8005"/></Form.Item>
+        <Form.Item name="apiKey" label="服务密钥" hidden={mode === 'local'}><Input.Password autoComplete="new-password"/></Form.Item>
+        <Form.Item name="threshold" label="相似度阈值"><Slider min={0} max={1} step={0.05}/></Form.Item>
+        {mode === 'local' && !data.health.voiceprintModel && <Alert type="info" title={<Typography.Text>安装模型：<Typography.Text code> bun run setup:voiceprint</Typography.Text></Typography.Text>} style={{ marginBottom: 12 }}/>}<Button type="primary" htmlType="submit">保存</Button>
+      </Form>
+    </Panel></Col>
+    <Col xs={24} lg={16}><Panel title="说话人" extra={<Button type="primary" icon={<PlusOutlined/>} onClick={() => setModal(true)}>添加</Button>}>
+      <Table rowKey="id" size="small" dataSource={data.speakers} pagination={false} scroll={{ x: 480 }} columns={[
+        { title: '姓名', dataIndex: 'name' }, { title: '备注', dataIndex: 'description' },
+        { title: '状态', dataIndex: 'enrolled', render: v => <Tag color={v ? 'green' : 'default'}>{v ? '已登记' : '待上传'}</Tag> },
+        { title: '操作', render: (_, r) => <Space><Upload accept="audio/*" showUploadList={false} beforeUpload={file => { setBusy(r.id); void upload(`/speakers/${r.id}/enroll`, file).then(() => { refresh(); message.success('声纹样本注册成功'); }).catch(e => message.error(String(e))).finally(() => setBusy('')); return false; }}><Button loading={busy === r.id} icon={<UploadOutlined/>} title="至少 3 秒清晰单人录音">上传样本</Button></Upload><Button type="text" danger icon={<DeleteOutlined/>} onClick={() => api(`/speakers/${r.id}`, { method: 'DELETE' }).then(refresh).catch(e => message.error(String(e)))} aria-label={`移除${r.name}`}/></Space> },
+      ]}/>
+    </Panel></Col>
+    <Modal title="添加说话人" open={modal} onCancel={() => setModal(false)} onOk={async () => { try { await post('/speakers', { name, description }); setModal(false); setName(''); setDescription(''); refresh(); } catch (e) { message.error(String(e)); } }}><Form layout="vertical"><Form.Item label="姓名"><Input value={name} onChange={e => setName(e.target.value)}/></Form.Item><Form.Item label="备注"><Input value={description} onChange={e => setDescription(e.target.value)} placeholder="可选"/></Form.Item></Form></Modal>
+  </Row>;
 }
 
 function Mcp({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   const { message } = AntApp.useApp(); const [modal, setModal] = useState(false); const [form] = Form.useForm(); const [selected, setSelected] = useState(''); const [tools, setTools] = useState<Json[]>([]); const [tool, setTool] = useState(''); const [args, setArgs] = useState('{}'); const [result, setResult] = useState(''); const [busy, setBusy] = useState(false);
   async function load(id: string) { setBusy(true); setSelected(id); setTool(''); setResult(''); try { setTools((await api(`/mcp/${id}/tools`)).tools); message.success('MCP 连接成功，已读取工具'); } catch (e) { setTools([]); message.error(String(e)); } finally { setBusy(false); } }
-  return <><div className="section-toolbar"><div className="inline-info"><ApiOutlined/><span>远程工具通过 Streamable HTTP 或 SSE 连接。已配置的工具也会提供给对话模型调用。</span></div><Button type="primary" icon={<PlusOutlined/>} onClick={() => setModal(true)}>添加 MCP 服务</Button></div>
-    <div className="mcp-grid">{data.endpoints.length ? data.endpoints.map(e => <div className={`mcp-card ${selected === e.id ? 'active' : ''}`} key={e.id}><div className="mcp-card-top"><span className="mcp-icon"><ApiOutlined/></span><Tag>{e.transport.toUpperCase()}</Tag></div><h3>{e.name}</h3><p title={e.url}>{e.url}</p><div className="mcp-card-actions"><Button onClick={() => load(e.id)} loading={busy && selected === e.id} icon={<LinkOutlined/>}>连接并读取工具</Button><Button type="text" danger icon={<DeleteOutlined/>} aria-label={`删除${e.name}`} onClick={() => api(`/mcp/${e.id}`, { method: 'DELETE' }).then(() => { if (selected === e.id) { setSelected(''); setTools([]); } refresh(); }).catch(error => message.error(String(error)))}/></div></div>) : <div className="mcp-empty"><ApiOutlined/><h3>连接你自己的工具</h3><p>添加一个 MCP 服务，让小智能查询信息或执行操作。</p><Button onClick={() => setModal(true)} icon={<PlusOutlined/>}>添加第一个服务</Button></div>}</div>
-    <Panel title="工具调试" subtitle="工具参数由服务声明，点击后执行真实远程调用"><div className="tool-form"><Select value={tool || undefined} placeholder={tools.length ? '选择工具' : '请先连接一个 MCP 服务'} options={tools.map(t => ({ label: `${t.name}${t.description ? ` · ${t.description.slice(0, 50)}` : ''}`, value: t.name }))} onChange={setTool}/>{tools.find(t => t.name === tool)?.inputSchema && <pre className="schema-preview">{JSON.stringify(tools.find(t => t.name === tool)!.inputSchema, null, 2)}</pre>}<Input.TextArea value={args} onChange={e => setArgs(e.target.value)} rows={4} placeholder="工具参数 JSON"/><Button type="primary" disabled={!tool || !selected} loading={busy} icon={<PlayCircleOutlined/>} onClick={async () => { setBusy(true); try { setResult(JSON.stringify(await post(`/mcp/${selected}/call`, { name: tool, arguments: JSON.parse(args) }), null, 2)); } catch (e) { message.error(String(e)); } finally { setBusy(false); } }}>执行工具</Button>{result && <pre className="json-result">{result}</pre>}</div></Panel>
-    <Modal title="添加远程 MCP 服务" open={modal} onCancel={() => setModal(false)} onOk={() => form.submit()}><Form layout="vertical" form={form} initialValues={{ transport: 'http', token: '' }} onFinish={async values => { try { await post('/mcp', values); refresh(); setModal(false); form.resetFields(); message.success('服务已保存，点击连接读取工具'); } catch (e) { message.error(String(e)); } }}><Form.Item name="name" label="服务名称" rules={[{ required: true }]}><Input placeholder="例如：家庭工具"/></Form.Item><Form.Item name="url" label="服务地址" rules={[{ required: true, type: 'url' }]}><Input placeholder="http://127.0.0.1:3001/mcp"/></Form.Item><Form.Item name="transport" label="传输方式"><Select options={[{ value: 'http', label: 'Streamable HTTP' }, { value: 'sse', label: 'SSE（旧版兼容）' }]}/></Form.Item><Form.Item name="token" label="Bearer Token（可选）"><Input.Password autoComplete="new-password"/></Form.Item></Form></Modal>
-  </>;
+  return <Flex vertical gap={12}>
+    <Panel title="MCP 服务" extra={<Button type="primary" icon={<PlusOutlined/>} onClick={() => setModal(true)}>添加服务</Button>}>
+      <Table rowKey="id" size="small" dataSource={data.endpoints} pagination={false} scroll={{ x: 560 }} columns={[
+        { title: '名称', dataIndex: 'name' }, { title: '地址', dataIndex: 'url', render: v => <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{v}</Typography.Text> },
+        { title: '协议', dataIndex: 'transport', render: v => <Tag>{v.toUpperCase()}</Tag> },
+        { title: '操作', render: (_, e) => <Space><Button type={selected === e.id ? 'primary' : 'default'} onClick={() => load(e.id)} loading={busy && selected === e.id} icon={<LinkOutlined/>}>读取工具</Button><Button type="text" danger icon={<DeleteOutlined/>} aria-label={`删除${e.name}`} onClick={() => api(`/mcp/${e.id}`, { method: 'DELETE' }).then(() => { if (selected === e.id) { setSelected(''); setTools([]); setTool(''); setResult(''); } refresh(); }).catch(error => message.error(String(error)))}/></Space> },
+      ]}/>
+    </Panel>
+    <Panel title="工具调试"><Flex vertical gap={8}>
+      <Select value={tool || undefined} placeholder={tools.length ? '选择工具' : '请先读取服务工具'} options={tools.map(t => ({ label: t.name, value: t.name }))} onChange={setTool}/>
+      {tools.find(t => t.name === tool)?.description && <Typography.Text type="secondary">{tools.find(t => t.name === tool)!.description}</Typography.Text>}
+      <Columns><Form layout="vertical"><Form.Item label="参数 JSON"><Input.TextArea value={args} onChange={e => setArgs(e.target.value)} rows={4}/></Form.Item></Form><div>{tools.find(t => t.name === tool)?.inputSchema && <pre className="console-output">{JSON.stringify(tools.find(t => t.name === tool)!.inputSchema, null, 2)}</pre>}</div></Columns>
+      <Button type="primary" style={{ alignSelf: 'flex-start' }} disabled={!tool || !selected} loading={busy} icon={<PlayCircleOutlined/>} onClick={async () => { setBusy(true); try { setResult(JSON.stringify(await post(`/mcp/${selected}/call`, { name: tool, arguments: JSON.parse(args) }), null, 2)); } catch (e) { message.error(String(e)); } finally { setBusy(false); } }}>执行</Button>
+      {result && <pre className="console-output">{result}</pre>}
+    </Flex></Panel>
+    <Modal title="添加 MCP 服务" open={modal} onCancel={() => setModal(false)} onOk={() => form.submit()}><Form layout="vertical" form={form} initialValues={{ transport: 'http', token: '' }} onFinish={async values => { try { await post('/mcp', values); refresh(); setModal(false); form.resetFields(); message.success('服务已保存'); } catch (e) { message.error(String(e)); } }}><Form.Item name="name" label="名称" rules={[{ required: true }]}><Input/></Form.Item><Form.Item name="url" label="地址" rules={[{ required: true, type: 'url' }]}><Input placeholder="http://127.0.0.1:3001/mcp"/></Form.Item><Form.Item name="transport" label="协议"><Select options={[{ value: 'http', label: 'Streamable HTTP' }, { value: 'sse', label: 'SSE' }]}/></Form.Item><Form.Item name="token" label="Bearer Token"><Input.Password autoComplete="new-password"/></Form.Item></Form></Modal>
+  </Flex>;
 }
 
 function Logs({ data }: { data: Snapshot }) {
   const [filter, setFilter] = useState('all'); const [query, setQuery] = useState(''); const logs = data.logs.filter(l => (filter === 'all' || l.level === filter) && `${l.scope} ${l.message} ${l.deviceId || ''}`.toLowerCase().includes(query.toLowerCase()));
-  return <Panel title="网关事件流" subtitle="自动更新，显示最近 150 条事件；服务端保留最近 2000 条" extra={<Tag color="green">实时</Tag>}><div className="logs-toolbar"><Segmented value={filter} onChange={v => setFilter(String(v))} options={[{ value: 'all', label: '全部' }, { value: 'success', label: '成功' }, { value: 'warn', label: '提醒' }, { value: 'error', label: '错误' }]}/><Input.Search placeholder="搜索设备、模块或日志内容" value={query} onChange={e => setQuery(e.target.value)} allowClear style={{ maxWidth: 300 }}/></div><EventList logs={logs.slice().reverse()}/></Panel>;
+  return <Panel title="运行日志" extra={<Tag color="green">实时</Tag>}><Flex vertical gap={12}>
+    <Flex justify="space-between" wrap gap={8}><Select style={{ width: 100 }} value={filter} onChange={setFilter} options={[{ value: 'all', label: '全部' }, { value: 'info', label: '信息' }, { value: 'success', label: '成功' }, { value: 'warn', label: '提醒' }, { value: 'error', label: '错误' }]}/><Input.Search placeholder="搜索日志" value={query} onChange={e => setQuery(e.target.value)} allowClear style={{ width: 240, maxWidth: '100%' }}/></Flex>
+    <EventList logs={logs.slice().reverse()}/>
+  </Flex></Panel>;
 }
