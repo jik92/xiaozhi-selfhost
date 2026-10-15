@@ -4,6 +4,8 @@ const httpUrl = z.string().url().refine(v => /^https?:/.test(v), '请输入 HTTP
 export const SettingsSchema = z.object({
   publicHost: z.string().min(1).max(253).regex(/^[a-zA-Z0-9.\-]+$/, '仅填写 IP 或主机名，不含端口'),
   defaultTransport: z.enum(['websocket', 'mqtt']),
+  wakePrefix: z.string().trim().max(80, '语音前缀最多 80 个字符').default(''),
+  wakeGreeting: z.string().trim().max(200, '唤醒回复最多 200 个字符').default('我在，请说。'),
   llm: z.object({ baseUrl: httpUrl, apiKey: z.string().max(2048), model: z.string().min(1).max(128), systemPrompt: z.string().max(8000) }),
   asr: z.object({ type: z.enum(['qwen', 'openai']), baseUrl: httpUrl, apiKey: z.string().max(2048), model: z.string().min(1).max(128) }),
   tts: z.object({ type: z.enum(['edge', 'openai']), baseUrl: httpUrl, apiKey: z.string().max(2048), model: z.string().max(128), voice: z.string().min(1).max(128) }),

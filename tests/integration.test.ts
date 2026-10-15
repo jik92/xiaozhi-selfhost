@@ -61,6 +61,15 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
     ws.onmessage = e => { if (typeof e.data === 'string') control.push(JSON.parse(e.data)); else frames.push(Buffer.from(e.data)); };
     await once(ws, 'open'); ws.send(JSON.stringify({ type: 'hello', version: 1, audio_params: { sample_rate: 16000, frame_duration: 60 } }));
     await until(() => control.some(m => m.type === 'hello')); expect(control.find(m => m.type === 'hello').audio_params.sample_rate).toBe(24000);
+    // Firmware sends the detected word separately, often followed immediately by start.
+    ws.send(JSON.stringify({ type: 'listen', state: 'detect', text: '小薇同学' }));
+    ws.send(JSON.stringify({ type: 'listen', state: 'start', mode: 'auto' }));
+    await until(() => frames.length > 0 && control.some(m => m.type === 'tts' && m.state === 'sentence_end'));
+    expect(control.some(m => m.type === 'stt' && m.text === '小薇同学')).toBe(true);
+    expect(control.some(m => m.type === 'tts' && m.state === 'sentence_start' && m.text === app.store.settings.wakeGreeting)).toBe(true);
+    await until(() => !app.manager.get(id).busy);
+    expect(app.manager.get(id).listening).toBe(true);
+    control.length = 0; frames.length = 0;
     ws.send(JSON.stringify({ type: 'listen', state: 'start', mode: 'manual' }));
     for (const frame of encodePcm(tone(16000, 0.6), 60, 16000)) ws.send(new Uint8Array(frame));
     ws.send(JSON.stringify({ type: 'listen', state: 'stop' }));
