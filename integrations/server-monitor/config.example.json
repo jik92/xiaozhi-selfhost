@@ -1,0 +1,10 @@
+{
+  "grafanaUrl": "https://monitor.ounirobot.com",
+  "orgId": 1,
+  "datasourceUid": "prometheus",
+  "grafanaTokenFile": "grafana.token",
+  "expectedNodeCount": 5,
+  "expectedNodes": ["ECS-PROD-01", "ECS-PROD-02 (UAT)", "ECS-PROD-03", "ECS-PROD-04", "ECS-PROD-05"],
+  "maxAgeSeconds": 120,
+  "thresholds": { "cpu": 80, "memory": 85, "disk": 85, "critical": 95 }
+}

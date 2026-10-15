@@ -11,7 +11,8 @@
     "test": "bun test",
     "check": "tsc --noEmit",
     "setup:voiceprint": "bun scripts/setup-voiceprint.ts",
-    "mcp:moment": "bun integrations/moment-factory/main.ts"
+    "mcp:moment": "bun integrations/moment-factory/main.ts",
+    "mcp:monitor": "bun integrations/server-monitor/main.ts"
   },
   "dependencies": {
     "@ant-design/icons": "latest",

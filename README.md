@@ -214,3 +214,7 @@ data/                SQLite、声纹模型、运行数据（Git 忽略）
 - [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)：本地声纹运行时，Apache-2.0；模型授权按其原发布者说明执行。
 
 本项目代码采用 MIT 许可证；第三方依赖与模型保留各自授权。
+
+## 独立服务器监控 MCP
+
+通过 Grafana 查询服务器 CPU、内存、磁盘、容器与数据库状态，并让小智按当前角色播报。复用现有监控数据源，运行 `bun run mcp:monitor` 启动独立只读服务；配置和接入方法见 [服务器监控 MCP](integrations/server-monitor/README.md)。
