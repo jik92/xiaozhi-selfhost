@@ -8,6 +8,7 @@ import { EDGE_VOICES, FRIEND_ROLE } from '../shared/roles';
 import type { AiTask } from '../shared/tasks';
 import type { BrowserAudioEvent, BrowserAudioStop } from '../shared/browser-audio';
 import { BrowserSpeechPlayer, type PlaybackState } from './browser-audio';
+import type { WifiScan } from '../shared/wifi';
 
 type Page = 'overview' | 'flash' | 'devices' | 'ai' | 'tasks' | 'roles' | 'voice' | 'mcp' | 'logs';
 const pages = [
@@ -135,6 +136,8 @@ function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => voi
   const { message } = AntApp.useApp(); const [logs, setLogs] = useState<string[]>(['小智本地刷写工具已就绪。', '连接设备后，系统会识别芯片并备份 NVS 配置。']); const [chip, setChip] = useState<ChipInfo>();
   const [progress, setProgress] = useState(0); const [stage, setStage] = useState('等待连接串口'); const [busy, setBusy] = useState(false); const [mode, setMode] = useState('config'); const [firmware, setFirmware] = useState<File>();
   const [transport, setTransport] = useState<'websocket' | 'mqtt'>(data.settings.defaultTransport); const [ssid, setSsid] = useState(''); const [password, setPassword] = useState(''); const [waiting, setWaiting] = useState<{ id: string; since: number }>(); const [monitoring, setMonitoring] = useState(false);
+  const [wifi, setWifi] = useState<WifiScan>({ networks: [] }); const [scanningWifi, setScanningWifi] = useState(false); const [wifiError, setWifiError] = useState('');
+  async function scanNetworks() { setScanningWifi(true); setWifiError(''); try { setWifi(await api<WifiScan>('/wifi')); } catch (e) { setWifiError(e instanceof Error ? e.message : String(e)); } finally { setScanningWifi(false); } }
   const logBottom = useRef<HTMLDivElement>(null); const flasher = useRef<SerialFlasher | null>(null);
   if (!flasher.current) flasher.current = new SerialFlasher(text => setLogs(l => [...l, text].slice(-200)), (value, text) => { setProgress(value); setStage(text); });
   useEffect(() => { logBottom.current?.scrollIntoView({ block: 'nearest' }); }, [logs]);
@@ -162,7 +165,7 @@ function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => voi
             {mode === 'firmware' && <Form.Item label="固件" extra="选择匹配 WHA103、从 0x0 开始的合并固件。"><Upload accept=".bin" maxCount={1} beforeUpload={file => { setFirmware(file); return false; }} onRemove={() => setFirmware(undefined)}><Button icon={<UploadOutlined/>}>选择 .bin 文件</Button></Upload></Form.Item>}
             <Form.Item label="连接协议"><Select value={transport} onChange={setTransport} options={[{ label: 'WebSocket', value: 'websocket' }, { label: 'MQTT + UDP', value: 'mqtt' }]}/></Form.Item>
             <Form.Item label="OTA 地址" tooltip="设备与电脑需在同一局域网。"><Typography.Text copyable>{data.connection.otaUrl}</Typography.Text></Form.Item>
-            <Columns><Form.Item label="Wi-Fi 名称"><Input autoComplete="off" value={ssid} onChange={e => setSsid(e.target.value)} placeholder="留空保留已有网络" maxLength={32}/></Form.Item><Form.Item label="Wi-Fi 密码"><Input.Password autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="2.4GHz Wi-Fi" disabled={!ssid || busy} maxLength={64}/></Form.Item></Columns>
+            <Columns><Form.Item label="Wi-Fi 名称" validateStatus={wifiError ? 'warning' : undefined} help={wifiError || wifi.warning}><Space.Compact style={{ width: '100%' }}><AutoComplete style={{ width: '100%' }} value={ssid} onChange={setSsid} options={Array.from(new Set(wifi.networks.map(n => n.ssid))).map(name => ({ value: name, label: `${name} · ${Array.from(new Set(wifi.networks.filter(n => n.ssid === name).map(n => n.band))).join('/')}` }))} filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}><Input autoComplete="off" placeholder="选择或输入，留空保留已有网络" maxLength={32}/></AutoComplete><Button icon={<ReloadOutlined/>} loading={scanningWifi} onClick={() => void scanNetworks()}>扫描</Button></Space.Compact></Form.Item><Form.Item label="Wi-Fi 密码"><Input.Password autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="2.4GHz Wi-Fi" disabled={!ssid || busy} maxLength={64}/></Form.Item></Columns>
           </Form>
           <Button type="primary" icon={<ThunderboltOutlined/>} disabled={!chip || (mode === 'firmware' && !firmware) || !!waiting || monitoring} loading={busy} onClick={() => run(flash)}>{mode === 'config' ? '写入配置并重启' : '刷写固件并重启'}</Button>
           <Typography.Text type="secondary">写入前自动备份 NVS</Typography.Text>

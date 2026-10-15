@@ -11,6 +11,7 @@ import { pcmToWav, toPcm } from './audio';
 import type { Json, McpEndpoint, Speaker, Snapshot } from '../shared/types';
 import { TaskScheduler } from './tasks';
 import { BUILTIN_ID } from './builtin-tools';
+import { scanWifi } from './wifi';
 
 const deviceIdSchema = z.string().regex(/^[a-zA-Z0-9:_-]{1,80}$/);
 const textSchema = z.object({ text: z.string().trim().min(1).max(4000) });
@@ -62,6 +63,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           return json(result);
         }
         if (path === '/api/snapshot') return json(snapshot());
+        if (path === '/api/wifi' && req.method === 'GET') return json(await scanWifi());
         const userAudioRoute = path.match(/^\/api\/messages\/([1-9]\d{0,14})\/audio$/);
         if (userAudioRoute && req.method === 'GET') {
           const audio = store.userAudio(Number(userAudioRoute[1]));
