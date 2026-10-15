@@ -7,7 +7,7 @@ export class TaskScheduler {
   private running = new Map<string, { controller: AbortController; done: Promise<void> }>();
   private timer?: ReturnType<typeof setInterval>;
   private stopped = false;
-  constructor(private store: Store, private run: (task: AiTask, signal: AbortSignal) => Promise<Result>, private now = Date.now, autoStart = true) {
+  constructor(private store: Store, private run: (task: AiTask, signal: AbortSignal, manual: boolean) => Promise<Result>, private now = Date.now, autoStart = true) {
     const tasks = this.list(); let recovered = false;
     for (const task of tasks) if (task.lastStatus === 'running') { task.lastStatus = 'error'; task.lastError = '服务重启中断执行，未自动重放'; recovered = true; }
     if (recovered) this.write(tasks);
@@ -61,7 +61,7 @@ export class TaskScheduler {
     this.running.set(id, { controller, done });
     this.store.log('info', '定时任务', `开始：${task.name}`, task.deviceId);
     try {
-      const result = await this.run(structuredClone(task), controller.signal); controller.signal.throwIfAborted();
+      const result = await this.run(structuredClone(task), controller.signal, !scheduled); controller.signal.throwIfAborted();
       const latest = this.list(), current = latest.find(t => t.id === id);
       if (current) { current.lastStatus = 'success'; current.lastResult = result.text.slice(0, 16000); current.lastDelivery = result.delivery; this.write(latest); }
       this.store.log('success', '定时任务', `完成：${task.name}（${result.delivery === 'played' ? '已播报' : result.delivery === 'offline' ? '设备离线，结果已保存' : '设备忙，结果已保存'}）`, task.deviceId);

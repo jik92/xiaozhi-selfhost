@@ -320,7 +320,7 @@ function Tasks({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   function edit(task?: AiTask) {
     setEditing(task?.id); form.resetFields();
     const seconds = task?.schedule.seconds || 300, unit = seconds % 3600 === 0 ? 3600 : seconds % 60 === 0 ? 60 : 1;
-    form.setFieldsValue({ name: task?.name || '', prompt: task?.prompt || '', deviceId: task?.deviceId || data.devices[0]?.id,
+    form.setFieldsValue({ name: task?.name || '', prompt: task?.prompt || '', deviceId: task?.deviceId || (data.devices.find(d => d.online) || data.devices[0])?.id,
       enabled: task?.enabled ?? true, kind: task?.schedule.kind || 'interval', amount: seconds / unit, unit,
       repeat: task?.schedule.repeat || 'daily', time: task?.schedule.time || '09:00',
       dateTime: new Date((task?.schedule.runAt || Date.now() + 5 * 60000) + 8 * 3600000).toISOString().slice(0, 16) });
@@ -347,11 +347,12 @@ function Tasks({ data, refresh }: { data: Snapshot; refresh: () => void }) {
         {task.lastResult && <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }} copyable>{task.lastResult}</Typography.Paragraph>}
       </Flex> }} columns={[
         { title: '任务', dataIndex: 'name', width: 160, ellipsis: true },
+        { title: '播报设备', width: 180, render: (_, task) => { const device = data.devices.find(d => d.id === task.deviceId); return <Space direction="vertical" size={0}><Typography.Text>{device?.name || task.deviceId}</Typography.Text><Tag color={device?.online ? 'success' : 'default'}>{device?.online ? '在线' : '离线'}</Tag></Space>; } },
         { title: '启用', width: 65, render: (_, task) => <Switch checked={task.enabled} onChange={enabled => action(task.id, 'PATCH', { enabled })}/> },
         { title: '触发方式（北京时间）', width: 190, render: (_, task) => scheduleText(task) },
         { title: '下次触发', width: 150, render: (_, task) => beijingTime(task.nextRunAt) },
         { title: '最近执行', width: 150, render: (_, task) => beijingTime(task.lastRunAt) },
-        { title: '状态', width: 140, render: (_, task) => <Space><Tag color={statuses[task.lastStatus][0]}>{statuses[task.lastStatus][1]}</Tag>{task.lastStatus === 'success' && <Typography.Text type="secondary">{task.lastDelivery === 'played' ? '已播报' : '结果已保存'}</Typography.Text>}</Space> },
+        { title: '状态', width: 140, render: (_, task) => <Space><Tag color={statuses[task.lastStatus][0]}>{statuses[task.lastStatus][1]}</Tag>{task.lastStatus === 'success' && <Typography.Text type="secondary">{task.lastDelivery === 'played' ? '音频已发送' : task.lastDelivery === 'offline' ? '设备离线，未播报' : task.lastDelivery === 'busy' ? '设备忙，未播报' : '结果已保存'}</Typography.Text>}</Space> },
         { title: '操作', width: 230, render: (_, task) => <Space>
           {task.lastStatus === 'running' ? <Button onClick={() => action(`${task.id}/cancel`)}>停止</Button> : <Button icon={<PlayCircleOutlined/>} onClick={() => action(`${task.id}/run`)}>立即执行</Button>}
           <Button disabled={task.lastStatus === 'running'} onClick={() => edit(task)}>编辑</Button>
@@ -369,7 +370,7 @@ function Tasks({ data, refresh }: { data: Snapshot; refresh: () => void }) {
           setOpen(false); refresh(); message.success('任务已保存');
         } catch (e) { message.error(String(e)); } finally { setSaving(false); }
       }}>
-        <Columns><Form.Item name="name" label="任务名称" rules={[{ required: true }, { max: 80 }]}><Input maxLength={80}/></Form.Item><Form.Item name="deviceId" label="设备" rules={[{ required: true }]}><Select placeholder="请先登记设备" options={data.devices.map(d => ({ value: d.id, label: `${d.name}${d.online ? '' : '（离线）'}` }))}/></Form.Item></Columns>
+        <Columns><Form.Item name="name" label="任务名称" rules={[{ required: true }, { max: 80 }]}><Input maxLength={80}/></Form.Item><Form.Item name="deviceId" label="设备" rules={[{ required: true }]}><Select placeholder="请先登记设备" options={data.devices.map(d => ({ value: d.id, label: `${d.name} · ${d.online ? '在线' : '离线'} · ${d.id}` }))}/></Form.Item></Columns>
         <Form.Item name="prompt" label="发给小欧的话" rules={[{ required: true, whitespace: true }, { max: 4000 }]}><Input.TextArea rows={3} maxLength={4000} placeholder="例如：查一下今天的天气，简短告诉我出门要注意什么。"/></Form.Item>
         <Form.Item name="kind" label="触发方式"><Segmented block options={[{ label: '间隔时间', value: 'interval' }, { label: '定时触发', value: 'scheduled' }, { label: '延迟一次', value: 'delay' }]}/></Form.Item>
         {kind !== 'scheduled' ? <Columns><Form.Item name="amount" label={kind === 'delay' ? '延迟' : '执行间隔'} rules={[{ required: true }]}><InputNumber min={1} max={31536000} precision={0} style={{ width: '100%' }}/></Form.Item><Form.Item name="unit" label="单位"><Select options={[{ value: 1, label: '秒' }, { value: 60, label: '分钟' }, { value: 3600, label: '小时' }]}/></Form.Item></Columns> : <>

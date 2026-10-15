@@ -227,8 +227,10 @@ export class SessionManager {
       if (session.controller === controller) { session.busy = false; session.state('idle'); }
     }
   }
-  async runTask(deviceId: string, text: string, signal: AbortSignal) {
+  async runTask(deviceId: string, text: string, signal: AbortSignal, options: { interruptListening?: boolean } = {}) {
     const candidate = this.sessions.get(deviceId);
+    signal.throwIfAborted();
+    if (options.interruptListening && candidate?.alive && !candidate.busy && candidate.listening) candidate.abort();
     const live = candidate?.alive && !candidate.busy && !candidate.listening ? candidate : undefined;
     const controller = new AbortController();
     const cancel = () => controller.abort(); signal.addEventListener('abort', cancel, { once: true });

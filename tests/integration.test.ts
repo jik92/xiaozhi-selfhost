@@ -46,6 +46,31 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
   async function request(path: string, body?: unknown) { return fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   async function register(id: string, transport = 'websocket') { const r = await request('/api/provision', { id, transport, board: 'wha103' }); expect(r.ok).toBe(true); return r.json() as Promise<any>; }
 
+  test('run-now task leaves standby listening and sends device audio; scheduled tasks do not interrupt', async () => {
+    const id = 'task-audio-device'; await register(id);
+    const ws = new WebSocket(`ws://127.0.0.1:${app.server.port}/xiaozhi/v1/?device_id=${id}&token=${app.store.token(id)}`);
+    const frames: Buffer[] = []; const control: any[] = [];
+    ws.onmessage = event => { if (typeof event.data === 'string') control.push(JSON.parse(event.data)); else frames.push(Buffer.from(event.data)); };
+    let taskId = '';
+    try {
+      await once(ws, 'open'); ws.send(JSON.stringify({ type: 'hello', audio_params: { frame_duration: 60 } }));
+      ws.send(JSON.stringify({ type: 'listen', state: 'start', mode: 'auto' }));
+      await until(() => app.manager.get(id).listening);
+      const task = app.tasks.save({ name: '任务播报回归', prompt: '请播报当前时间', deviceId: id, enabled: false, schedule: { kind: 'interval', seconds: 3600 } }); taskId = task.id;
+      await app.tasks.trigger(task.id, true);
+      expect(app.tasks.list().find(t => t.id === task.id)?.lastDelivery).toBe('busy');
+      expect(app.manager.get(id).listening).toBe(true); expect(frames).toHaveLength(0);
+      expect((await request(`/api/tasks/${task.id}/run`, {})).status).toBe(202);
+      await until(() => app.tasks.list().find(t => t.id === task.id)?.lastStatus === 'success');
+      expect(app.tasks.list().find(t => t.id === task.id)?.lastDelivery).toBe('played');
+      await until(() => control.some(m => m.type === 'tts' && m.state === 'sentence_end'));
+      expect(frames.length).toBeGreaterThan(0); expect(app.manager.get(id).listening).toBe(false);
+      app.manager.get(id).busy = true;
+      const before = frames.length; await app.tasks.trigger(task.id);
+      expect(app.tasks.list().find(t => t.id === task.id)?.lastDelivery).toBe('busy'); expect(frames).toHaveLength(before);
+    } finally { if (taskId) app.tasks.remove(taskId); ws.close(); }
+  });
+
   test('DingTalk callback → current role → TTS → device Opus without chat tools or a browser action', async () => {
     const id = 'dingtalk-device'; await register(id);
     const original = structuredClone(app.store.settings);

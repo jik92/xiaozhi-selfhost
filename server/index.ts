@@ -22,7 +22,7 @@ type WsData = { kind: 'events'; listener?: (event: Json) => void } | { kind: 'de
 export async function startApp(options: { port?: number; mqttPort?: number; udpPort?: number; dataDir?: string; transports?: boolean } = {}) {
   const port = options.port ?? Number(process.env.PORT || 18080); const mqttPort = options.mqttPort ?? Number(process.env.MQTT_PORT || 18883); const udpPort = options.udpPort ?? Number(process.env.UDP_PORT || 18884);
   const store = new Store(options.dataDir); const providers = new Providers(store); const mcp = new McpManager(store); const manager = new SessionManager(store, providers, mcp);
-  const tasks = new TaskScheduler(store, (task, signal) => manager.runTask(task.deviceId, task.prompt, signal));
+  const tasks = new TaskScheduler(store, (task, signal, manual) => manager.runTask(task.deviceId, task.prompt, signal, { interruptListening: manual }));
   const dingtalk = new DingTalkNotifications(store, manager);
   const root = resolve('dist');
   let mqtt: Awaited<ReturnType<typeof startMqtt>> | undefined;
