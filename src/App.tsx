@@ -181,7 +181,7 @@ function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => voi
           </Flex>
           <Form layout="vertical" disabled={busy || !!waiting || monitoring}>
             <Form.Item label="设备板型"><Select aria-label="设备板型" value={board} onChange={value => { setBoard(value); setMode(value === 'ai-passport' ? 'firmware' : 'config'); setFirmware(undefined); }} options={Object.entries(BOARDS).map(([value, item]) => ({ value, label: item.label }))}/></Form.Item>
-            {board === 'ai-passport' && <Alert type="info" showIcon title="FoloToy AI Passport · ESP32-C3 · 8 MB" description="已安装小智固件可仅配置本地连接；其他固件请选完整固件。无法通过芯片型号自动区分板型，请确认实物。"/>}
+            {board === 'ai-passport' && <Alert type="info" showIcon title="FoloToy AI Passport · ESP32-C3 · 8 MB" description="已安装小智固件可仅配置本地连接；其他固件请选完整固件。待机主动播报请选择 MQTT + UDP。无法通过芯片型号自动区分板型，请确认实物。"/>}
             <Form.Item label="刷写内容" tooltip="选择串口会重启设备并进入下载模式。写入前自动备份 NVS。"><Select value={mode} onChange={setMode} options={[{ label: '仅配置本地连接', value: 'config' }, { label: '完整固件', value: 'firmware' }]}/></Form.Item>
             {mode === 'firmware' && board === 'ai-passport' && <Form.Item label="固件来源"><Typography.Paragraph>内置 Passport 小智 {PASSPORT_FIRMWARE.version}</Typography.Paragraph><Typography.Link href={PASSPORT_FIRMWARE.release} target="_blank">固件发布来源</Typography.Link></Form.Item>}
             {mode === 'firmware' && board !== 'ai-passport' && <Form.Item label="固件" extra={`选择匹配 ${BOARDS[board].label}、从 0x0 开始的合并固件。`}><Upload key={board} accept=".bin" maxCount={1} beforeUpload={file => { setFirmware(file); return false; }} onRemove={() => setFirmware(undefined)}><Button icon={<UploadOutlined/>}>选择 .bin 文件</Button></Upload></Form.Item>}
@@ -352,7 +352,7 @@ function Tasks({ data, refresh }: { data: Snapshot; refresh: () => void }) {
         { title: '触发方式（北京时间）', width: 190, render: (_, task) => scheduleText(task) },
         { title: '下次触发', width: 150, render: (_, task) => beijingTime(task.nextRunAt) },
         { title: '最近执行', width: 150, render: (_, task) => beijingTime(task.lastRunAt) },
-        { title: '状态', width: 140, render: (_, task) => <Space><Tag color={statuses[task.lastStatus][0]}>{statuses[task.lastStatus][1]}</Tag>{task.lastStatus === 'success' && <Typography.Text type="secondary">{task.lastDelivery === 'played' ? '音频已发送' : task.lastDelivery === 'offline' ? '设备离线，未播报' : task.lastDelivery === 'busy' ? '设备忙，未播报' : '结果已保存'}</Typography.Text>}</Space> },
+        { title: '状态', width: 140, render: (_, task) => <Space><Tag color={statuses[task.lastStatus][0]}>{statuses[task.lastStatus][1]}</Tag>{task.lastStatus === 'success' && <Typography.Text type="secondary">{task.lastDelivery === 'notified' ? '通知已下发' : task.lastDelivery === 'played' ? '音频已发送' : task.lastDelivery === 'failed' ? '音频发送失败' : task.lastDelivery === 'offline' ? '设备离线，未播报' : task.lastDelivery === 'busy' ? '设备忙，未播报' : '结果已保存'}</Typography.Text>}</Space> },
         { title: '操作', width: 230, render: (_, task) => <Space>
           {task.lastStatus === 'running' ? <Button onClick={() => action(`${task.id}/cancel`)}>停止</Button> : <Button icon={<PlayCircleOutlined/>} onClick={() => action(`${task.id}/run`)}>立即执行</Button>}
           <Button disabled={task.lastStatus === 'running'} onClick={() => edit(task)}>编辑</Button>

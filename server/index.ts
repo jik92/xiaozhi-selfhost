@@ -21,7 +21,7 @@ type WsData = { kind: 'events'; listener?: (event: Json) => void } | { kind: 'de
 
 export async function startApp(options: { port?: number; mqttPort?: number; udpPort?: number; dataDir?: string; transports?: boolean } = {}) {
   const port = options.port ?? Number(process.env.PORT || 18080); const mqttPort = options.mqttPort ?? Number(process.env.MQTT_PORT || 18883); const udpPort = options.udpPort ?? Number(process.env.UDP_PORT || 18884);
-  const store = new Store(options.dataDir); const providers = new Providers(store); const mcp = new McpManager(store); const manager = new SessionManager(store, providers, mcp);
+  const store = new Store(options.dataDir); const providers = new Providers(store); const mcp = new McpManager(store); const manager = new SessionManager(store, providers, mcp, () => `http://${store.connectionHost()}:${activePort}`);
   const tasks = new TaskScheduler(store, (task, signal, manual) => manager.runTask(task.deviceId, task.prompt, signal, { interruptListening: manual }));
   const dingtalk = new DingTalkNotifications(store, manager);
   const root = resolve('dist');
@@ -63,6 +63,13 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           if (transport === 'mqtt') result.mqtt = { endpoint: `${store.connectionHost()}:${mqttPort}`, client_id: `xiaozhi_${id.replaceAll(':', '_')}`, username: id, password: store.token(id), publish_topic: `xiaozhi/${id}/up`, subscribe_topic: `xiaozhi/${id}/down`, keepalive: 120 };
           else result.websocket = { url: connection().websocketUrl, token: store.token(id), version: 1 };
           return json(result);
+        }
+        const notificationAudio = path.match(/^\/xiaozhi\/notify-audio\/([a-f0-9]{64})\.ogg$/);
+        if (notificationAudio) {
+          if (req.method !== 'GET') return json({ error: '不支持的方法' }, 405);
+          const audio = manager.notificationAudio.get(notificationAudio[1]!);
+          if (!audio) return json({ error: '通知音频已过期或不存在' }, 404);
+          return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/ogg', 'Content-Length': String(audio.length), 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
         }
         if (path === '/api/snapshot') return json(snapshot());
         if (path === '/api/dingtalk' && req.method === 'GET') return json(dingtalk.snapshot());

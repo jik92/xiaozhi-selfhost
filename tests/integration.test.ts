@@ -6,7 +6,7 @@ import { createSocket } from 'node:dgram';
 import { once } from 'node:events';
 import mqtt from 'mqtt';
 import { startApp } from '../server/index';
-import { pcmToWav, encodePcm, createDecoder } from '../server/audio';
+import { pcmToWav, encodePcm, createDecoder, toPcm } from '../server/audio';
 import { encryptUdp, decryptUdp } from '../server/protocol';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -194,6 +194,59 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
       expect(app.store.devices.get(id)?.inputFrames).toBe(input.length);
     } finally { udp.close(); await client.endAsync(); }
     await until(() => !app.manager.sessions.has(id));
+  }, 15000);
+
+  test('Passport standby MQTT receives task and DingTalk notify audio without hello or UDP', async () => {
+    const id = 'passport-standby';
+    expect((await request('/api/provision', { id, board: 'ai-passport', transport: 'mqtt' })).ok).toBe(true);
+    const client = mqtt.connect(`mqtt://127.0.0.1:${mqttPort}`, { clientId: 'standby-test', username: id, password: app.store.token(id), protocolVersion: 4, reconnectPeriod: 0 });
+    const controls: any[] = []; const downloads: Buffer[] = []; const urls: string[] = []; const errors: unknown[] = [];
+    let taskId = ''; let downloadEnabled = true;
+    client.on('message', (_topic, payload) => {
+      const message = JSON.parse(payload.toString()); controls.push(message);
+      if (message.type === 'notify') {
+        urls.push(message.audio_url);
+        if (!downloadEnabled) return;
+        void fetch(message.audio_url).then(async response => {
+          expect(response.status).toBe(200); expect(response.headers.get('content-type')).toBe('audio/ogg');
+          expect(response.headers.get('cache-control')).toContain('no-store'); downloads.push(Buffer.from(await response.arrayBuffer()));
+        }).catch(error => errors.push(error));
+      }
+    });
+    try {
+      await new Promise<void>((resolve, reject) => { client.once('connect', () => resolve()); client.once('error', reject); });
+      await client.subscribeAsync(`xiaozhi/${id}/down`);
+      expect(app.manager.get(id).link.audioReady!()).toBe(false); expect(app.manager.canNotify(app.manager.get(id))).toBe(true);
+      const task = app.tasks.save({ name: '待机播报', deviceId: id, prompt: '播报当前时间', enabled: false, schedule: { kind: 'interval', seconds: 3600 } }); taskId = task.id;
+      await app.tasks.trigger(task.id);
+      expect(app.tasks.list().find(t => t.id === task.id)?.lastDelivery).toBe('notified');
+      expect(downloads).toHaveLength(1); expect(downloads[0]!.subarray(0, 4).toString()).toBe('OggS');
+      expect((await toPcm(downloads[0]!)).length).toBeGreaterThan(1000);
+      expect((await fetch(urls[0]!)).status).toBe(404);
+      app.store.set('dingtalk', { enabled: true, clientId: 'standby-client', clientSecret: 'mock-only', deviceId: id });
+      app.dingtalk.receive({ msgtype: 'text', msgId: 'standby-notice', createAt: Date.now(), conversationType: '1', text: { content: '会议即将开始' }, senderNick: '同事' });
+      await until(() => app.dingtalk.snapshot().records.find(r => r.deviceId === id)?.state === 'notified');
+      expect(downloads).toHaveLength(2); expect(controls.filter(m => m.type === 'notify')).toHaveLength(2);
+      expect(controls.some(m => m.type === 'hello' || m.type === 'tts')).toBe(false);
+      expect(app.manager.get(id).link.audioReady!()).toBe(false); expect(app.store.devices.get(id)?.inputFrames).toBe(0);
+      expect(errors).toEqual([]);
+      expect((await fetch(base + `/xiaozhi/notify-audio/${'0'.repeat(64)}.ogg`)).status).toBe(404);
+      downloadEnabled = false;
+      const controller = new AbortController(); const cancelled = app.manager.notify(id, '同事', '取消测试', controller.signal);
+      void cancelled.catch(() => {});
+      await until(() => urls.length === 3);
+      expect((await fetch(urls[2]!, { method: 'HEAD' })).status).toBe(405);
+      controller.abort(); await expect(cancelled).rejects.toThrow();
+      expect((await fetch(urls[2]!)).status).toBe(404); expect(app.manager.get(id).busy).toBe(false);
+      // A reachable MQTT client which never fetches audio must not be marked delivered.
+      const cache = app.manager.notificationAudio; const originalWait = cache.waitForFetch;
+      cache.waitForFetch = (clip, signal) => originalWait.call(cache, clip, AbortSignal.any([signal, AbortSignal.timeout(30)]));
+      try {
+        await app.tasks.trigger(task.id);
+        expect(app.tasks.list().find(t => t.id === task.id)?.lastDelivery).toBe('failed');
+        expect((await fetch(urls.at(-1)!)).status).toBe(404);
+      } finally { cache.waitForFetch = originalWait; }
+    } finally { app.store.set('dingtalk', { enabled: false }); if (taskId) app.tasks.remove(taskId); await client.endAsync(); }
   }, 15000);
 
   test('actual MCP HTTP initialization, tools/list and tools/call', async () => {

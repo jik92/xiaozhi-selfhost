@@ -122,14 +122,16 @@ export class DingTalkNotifications {
     if (!row) return;
     const session = this.manager.sessions.get(row.deviceId);
     if (!session?.alive || session.busy || session.listening) return;
-    if (session.link?.audioReady && !session.link.audioReady()) return;
+    if (this.manager.notificationAvailable && !this.manager.notificationAvailable(session)) return;
+    if (session.link?.controlReady && !session.link.controlReady()) return;
+    if (session.link?.audioReady && !session.link.audioReady() && !this.manager.canNotify?.(session)) return;
     this.update(row.id, 'playing');
     const controller = new AbortController(); this.controller = controller;
     this.active = (async () => {
       try {
-        await this.manager.notify(row.deviceId, row.sender, row.text, controller.signal);
-        controller.signal.throwIfAborted(); this.update(row.id, 'played');
-        this.store.log('success', '钉钉通知', '通知音频已发送到设备', row.deviceId);
+        const delivery = await this.manager.notify(row.deviceId, row.sender, row.text, controller.signal);
+        controller.signal.throwIfAborted(); this.update(row.id, delivery === 'notified' ? 'notified' : 'played');
+        this.store.log('success', '钉钉通知', delivery === 'notified' ? '通知已下发，设备已请求音频' : '通知音频已发送到设备', row.deviceId);
       } catch {
         this.update(row.id, controller.signal.aborted ? 'skipped' : 'failed', controller.signal.aborted ? '播报已取消' : '播报失败，请检查设备连接和 AI / 语音配置');
         if (!controller.signal.aborted) this.store.log('error', '钉钉通知', '通知播报失败，请检查设备连接和 AI / 语音配置', row.deviceId);

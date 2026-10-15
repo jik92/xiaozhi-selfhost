@@ -40,3 +40,19 @@ export function encodePcm(pcm: Buffer, frameMs = 60, rate = 24000) {
     return result;
   } finally { codec.delete(); }
 }
+
+export async function pcmToOggOpus(pcm: Buffer, signal: AbortSignal) {
+  signal.throwIfAborted();
+  if (!pcm.length || pcm.length > 24000 * 2 * 180) throw new Error('通知音频应为 3 分钟内的非空音频');
+  const child = Bun.spawn([process.env.FFMPEG_PATH || 'ffmpeg', '-hide_banner', '-loglevel', 'error',
+    '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', 'pipe:0', '-c:a', 'libopus',
+    '-application', 'voip', '-b:a', '24k', '-frame_duration', '60', '-f', 'ogg', 'pipe:1'], { stdin: pcm, stdout: 'pipe', stderr: 'pipe' });
+  const cancel = () => child.kill(); signal.addEventListener('abort', cancel, { once: true });
+  const timer = setTimeout(cancel, 30000);
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).arrayBuffer(), new Response(child.stderr).text(), child.exited]);
+    signal.throwIfAborted();
+    if (code !== 0) throw new Error(`通知音频编码失败：${err.slice(0, 200)}`);
+    return Buffer.from(out);
+  } finally { clearTimeout(timer); signal.removeEventListener('abort', cancel); }
+}

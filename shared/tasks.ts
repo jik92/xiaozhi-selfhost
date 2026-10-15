@@ -25,7 +25,7 @@ export interface AiTask extends TaskInput {
   lastStatus: 'idle' | 'running' | 'success' | 'error';
   lastResult?: string;
   lastError?: string;
-  lastDelivery?: 'played' | 'offline' | 'busy';
+  lastDelivery?: 'played' | 'notified' | 'offline' | 'busy' | 'failed';
   runCount: number;
 }
 export function nextTaskTime(schedule: TaskInput['schedule'], now: number) {

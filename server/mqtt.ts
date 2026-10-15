@@ -60,7 +60,7 @@ export async function startMqtt(store: Store, manager: SessionManager, mqttPort 
         if (!/^[a-zA-Z0-9:_-]{1,80}$/.test(username) || !store.verify(username, password) || clientId.length > 200) { send(0x20, Buffer.from([0, 5])); socket.end(); return; }
         if (manager.sessions.size >= 16 && !manager.sessions.has(username)) { send(0x20, Buffer.from([0, 3])); socket.end(); return; }
         id = username; send(0x20, Buffer.from([0, 0]));
-        session = manager.open(id, { kind: 'mqtt', json: down, close: () => socket.end(), audioReady: () => channelId !== undefined && !!channels.get(channelId)?.peer, audio: (frame, timestamp) => {
+        session = manager.open(id, { kind: 'mqtt', json: down, close: () => socket.end(), controlReady: () => !socket.destroyed, audioReady: () => channelId !== undefined && !!channels.get(channelId)?.peer, audio: (frame, timestamp) => {
           const channel = channelId !== undefined ? channels.get(channelId) : undefined;
           if (!channel?.peer) throw new Error('UDP 音频通道尚未建立，请先唤醒设备');
           udp.send(encryptUdp(frame, channel.key, channel.nonce, ++channel.outgoing, timestamp), channel.peer.port, channel.peer.address);

@@ -9,7 +9,7 @@ export const DingTalkConfigSchema = z.object({
   userIds: z.array(z.string().trim().min(1).max(200)).max(100).default([]),
 });
 export type DingTalkConfig = z.infer<typeof DingTalkConfigSchema>;
-export interface DingTalkRecord { id: string; created: number; deviceId: string; sender: string; text: string; state: 'queued' | 'playing' | 'played' | 'failed' | 'expired' | 'skipped' | 'unknown'; error: string; }
+export interface DingTalkRecord { id: string; created: number; deviceId: string; sender: string; text: string; state: 'queued' | 'playing' | 'played' | 'notified' | 'failed' | 'expired' | 'skipped' | 'unknown'; error: string; }
 export interface DingTalkSnapshot {
   config: Omit<DingTalkConfig, 'clientSecret'> & { hasSecret: boolean };
   status: 'disabled' | 'connecting' | 'connected' | 'reconnecting'; error: string;

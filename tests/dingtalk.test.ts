@@ -91,6 +91,7 @@ test('disabling cancels active delivery; credential redaction applies to generic
   f.manager.notify = async (_id, _sender, _text, signal) => {
     started = true;
     await new Promise<void>((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+    return 'played';
   };
   f.service.receive(f.message()); await until(() => started);
   expect(f.service.snapshot().records[0]?.state).toBe('playing');

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Store } from './store';
 import { TaskInputSchema, nextTaskTime, type AiTask } from '../shared/tasks';
 
-type Result = { text: string; delivery: 'played' | 'offline' | 'busy' };
+type Result = { text: string; delivery: 'played' | 'notified' | 'offline' | 'busy' | 'failed' };
 export class TaskScheduler {
   private running = new Map<string, { controller: AbortController; done: Promise<void> }>();
   private timer?: ReturnType<typeof setInterval>;
@@ -64,7 +64,7 @@ export class TaskScheduler {
       const result = await this.run(structuredClone(task), controller.signal, !scheduled); controller.signal.throwIfAborted();
       const latest = this.list(), current = latest.find(t => t.id === id);
       if (current) { current.lastStatus = 'success'; current.lastResult = result.text.slice(0, 16000); current.lastDelivery = result.delivery; this.write(latest); }
-      this.store.log('success', '定时任务', `完成：${task.name}（${result.delivery === 'played' ? '已播报' : result.delivery === 'offline' ? '设备离线，结果已保存' : '设备忙，结果已保存'}）`, task.deviceId);
+      this.store.log('success', '定时任务', `完成：${task.name}（${result.delivery === 'notified' ? '通知已下发，设备已请求音频' : result.delivery === 'played' ? '音频已发送' : result.delivery === 'failed' ? '播报失败，结果已保存' : result.delivery === 'offline' ? '设备离线，结果已保存' : '设备忙，结果已保存'}）`, task.deviceId);
     } catch (error) {
       const message = this.store.redact(controller.signal.aborted ? '任务已取消或执行超时' : String(error));
       const latest = this.list(), current = latest.find(t => t.id === id);
