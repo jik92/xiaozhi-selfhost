@@ -1,18 +1,10 @@
 import { Database } from 'bun:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
-import { networkInterfaces } from 'node:os';
+import { localHost } from './network';
+export { localHost } from './network';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 import { SettingsSchema, type Settings, type Device, type LogEvent, type Json, type McpEndpoint, type Speaker, type ChatMessage } from '../shared/types';
 import { BrowserAudioCache } from './browser-audio';
-
-export function localHost() {
-  for (const [name, addresses] of Object.entries(networkInterfaces())) {
-    if (/^(utun|lo|docker|veth)/.test(name)) continue;
-    const found = addresses?.find(a => a.family === 'IPv4' && !a.internal && /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address));
-    if (found) return found.address;
-  }
-  return '127.0.0.1';
-}
 
 export class Store {
   db: Database;
@@ -84,6 +76,7 @@ export class Store {
     return row?.audio;
   }
   publicSettings() { const copy = structuredClone(this.settings); for (const p of [copy.llm, copy.asr, copy.tts, copy.voiceprint]) p.apiKey = p.apiKey ? '••••••••' : ''; return copy; }
+  connectionHost() { return this.settings.publicHostMode === 'manual' ? this.settings.publicHost : localHost(); }
   saveSettings(input: unknown) {
     const next = SettingsSchema.parse(input);
     for (const k of ['llm', 'asr', 'tts', 'voiceprint'] as const) if (next[k].apiKey === '••••••••') next[k].apiKey = this.settings[k].apiKey;

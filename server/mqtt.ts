@@ -85,7 +85,7 @@ export async function startMqtt(store: Store, manager: SessionManager, mqttPort 
         if (channelId !== undefined) channels.delete(channelId);
         channelId = counter++ >>> 0;
         const crypto = newUdpKey(channelId); channels.set(channelId, { session, ...crypto, incoming: 0, outgoing: 0, address: (socket.remoteAddress || '').replace(/^::ffff:/, '') });
-        session.hello(msg, { udp: { server: store.settings.publicHost, port: udpPort, key: crypto.key.toString('hex'), nonce: crypto.nonce.toString('hex') } });
+        session.hello(msg, { udp: { server: store.connectionHost(), port: udpPort, key: crypto.key.toString('hex'), nonce: crypto.nonce.toString('hex') } });
       } else {
         if (msg.type === 'goodbye' && channelId !== undefined) { channels.delete(channelId); channelId = undefined; }
         void session.control(msg).catch(e => session?.fail(e));

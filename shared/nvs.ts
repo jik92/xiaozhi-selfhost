@@ -35,6 +35,26 @@ export function readNvsString(data: Uint8Array, namespace: string, key: string) 
   if (crc32(bytes) !== view(e.entry).getUint32(28, true)) throw new Error('NVS 字符串校验失败');
   return decoder.decode(bytes.subarray(0, Math.max(0, size - 1)));
 }
+// Repack live records in sequence order, preserving raw types, blob chunk indices,
+// namespaces and payloads. Keep one erased page for ESP-IDF's garbage collector.
+export function compactNvs(original: Uint8Array, size: number) {
+  if (size < 0x3000 || size % 4096) throw new Error('NVS 分区大小无效');
+  const entries = readNvs(original); const data = new Uint8Array(size).fill(255);
+  let pageIndex = -1; let slot = 126; let page: Uint8Array;
+  for (const entry of entries) {
+    if (slot + entry.span > 126) {
+      if (pageIndex >= 0) view(page!).setUint32(0, 0xfffffffc, true);
+      if (++pageIndex >= size / 4096 - 1) throw new Error('新 NVS 无法容纳原配置并保留空闲页，请使用更大的 NVS 布局固件');
+      page = data.subarray(pageIndex * 4096, (pageIndex + 1) * 4096);
+      view(page).setUint32(0, 0xfffffffe, true); view(page).setUint32(4, pageIndex, true);
+      page[8] = 0xfe; view(page).setUint32(28, crc32(page.subarray(4, 28)), true); slot = 0;
+    }
+    page!.set(entry.entry, 64 + slot * 32); page!.set(entry.payload, 96 + slot * 32);
+    for (let i = 0; i < entry.span; i++) mark(page!, slot + i, 2);
+    slot += entry.span;
+  }
+  readNvs(data); return data;
+}
 export function provisionNvs(original: Uint8Array, changes: { namespace: string; key: string; value: string | number }[]) {
   const data = original.slice(); const entries = readNvs(data);
   const namespaceIds = new Map(entries.filter(e => e.namespace === 0 && e.type === 1).map(e => [e.key, e.entry[24]!]));

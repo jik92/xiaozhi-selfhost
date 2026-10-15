@@ -1,3 +1,4 @@
+import { BOARDS, PASSPORT_FIRMWARE, type BoardId } from '../shared/firmware';
 import { Children, useEffect, useRef, useState } from 'react';
 import { App as AntApp, Alert, AutoComplete, Badge, Button, Card, Col, Descriptions, Empty, Flex, Form, Grid, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Progress, Row, Segmented, Select, Slider, Space, Spin, Statistic, Switch, Table, Tag, Typography, Upload } from 'antd';
 import { ApiOutlined, AudioOutlined, CheckOutlined, DashboardOutlined, DeleteOutlined, DisconnectOutlined, ExperimentOutlined, FileTextOutlined, LinkOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SendOutlined, SoundOutlined, StopOutlined, ThunderboltOutlined, UploadOutlined, UsbOutlined } from '@ant-design/icons';
@@ -135,6 +136,7 @@ function EventList({ logs }: { logs: Snapshot['logs'] }) {
 function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => void; navigate: (p: Page) => void }) {
   const { message } = AntApp.useApp(); const [logs, setLogs] = useState<string[]>(['小智本地刷写工具已就绪。', '连接设备后，系统会识别芯片并备份 NVS 配置。']); const [chip, setChip] = useState<ChipInfo>();
   const [progress, setProgress] = useState(0); const [stage, setStage] = useState('等待连接串口'); const [busy, setBusy] = useState(false); const [mode, setMode] = useState('config'); const [firmware, setFirmware] = useState<File>();
+  const [board, setBoard] = useState<BoardId>('wha103');
   const [transport, setTransport] = useState<'websocket' | 'mqtt'>(data.settings.defaultTransport); const [ssid, setSsid] = useState(''); const [password, setPassword] = useState(''); const [waiting, setWaiting] = useState<{ id: string; since: number }>(); const [monitoring, setMonitoring] = useState(false);
   const [wifi, setWifi] = useState<WifiScan>({ networks: [] }); const [scanningWifi, setScanningWifi] = useState(false); const [wifiError, setWifiError] = useState('');
   async function scanNetworks() { setScanningWifi(true); setWifiError(''); try { setWifi(await api<WifiScan>('/wifi')); } catch (e) { setWifiError(e instanceof Error ? e.message : String(e)); } finally { setScanningWifi(false); } }
@@ -147,27 +149,44 @@ function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => voi
     const device = data.devices.find(d => d.id === waiting.id && d.lastSeen >= waiting.since && (d.state === 'ready' || d.online));
     if (device) { setWaiting(undefined); setProgress(100); setStage(device.online ? '设备已连接本地环境' : '本地 OTA 已接通，唤醒设备开始对话'); message.success('设备已接入你的本地环境'); }
   }, [data.devices, waiting]);
-  useEffect(() => { if (!waiting) return; const timer = setTimeout(() => { setWaiting(undefined); setStage('尚未收到设备接入，请检查 Wi-Fi 与本机防火墙'); message.warning('配置已写入，但尚未验证本地连接。可以打开串口日志排查。'); }, 90000); return () => clearTimeout(timer); }, [waiting]);
+  useEffect(() => { if (!waiting) return; const timer = setTimeout(() => { setWaiting(undefined); setStage('尚未收到设备接入，请检查固件、Wi-Fi 与本机防火墙'); setLogs(l => [...l, '[尚未接入] 配置写入已校验，但未收到设备 OTA 或在线连接。若设备原来不是小智固件，请选择完整固件；否则检查 Wi-Fi、复位与 OTA 地址。']); message.warning('配置已写入，但尚未验证本地连接。可以打开串口日志排查。'); }, 90000); return () => clearTimeout(timer); }, [waiting]);
   async function run(action: () => Promise<void>) { setBusy(true); try { await action(); } catch (e) { const text = e instanceof Error ? e.message : String(e); setLogs(l => [...l, `[错误] ${text}`]); setStage('操作未完成'); message.error(text); } finally { setBusy(false); refresh(); } }
-  async function flash() { const since = Date.now(); const id = await flasher.current!.flash({ transport, ssid: ssid || undefined, password: ssid ? password : undefined, firmware: mode === 'firmware' ? firmware : undefined }); setPassword(''); setWaiting({ id, since }); }
+  async function flash() {
+    let selected = firmware;
+    if (mode === 'firmware' && board === 'ai-passport') {
+      setStage('加载并校验 Passport 固件');
+      const response = await fetch(`/firmware/${PASSPORT_FIRMWARE.name}`);
+      if (!response.ok) throw new Error('Passport 固件加载失败，请重试或选择本地固件');
+      const bytes = await response.arrayBuffer();
+      const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join('');
+      if (bytes.byteLength !== PASSPORT_FIRMWARE.size || hash !== PASSPORT_FIRMWARE.sha256) throw new Error('Passport 固件 SHA-256 校验失败，已停止刷写');
+      selected = new File([bytes], PASSPORT_FIRMWARE.name);
+    }
+    const since = Date.now();
+    const id = await flasher.current!.flash({ board, transport, ssid: ssid || undefined, password: ssid ? password : undefined, firmware: mode === 'firmware' ? selected : undefined });
+    setChip(undefined); setPassword(''); setWaiting({ id, since });
+  }
   const supported = 'serial' in navigator && window.isSecureContext;
   return <Flex vertical gap={12}>
     {!supported && <Alert type="warning" showIcon title="请使用 Chrome / Edge 通过 localhost 访问串口"/>}
     <Row gutter={[12, 12]}>
-      <Col xs={24} lg={14}><Panel title="串口刷写" extra={<Tag>WHA103 / ESP32-C3</Tag>}>
+      <Col xs={24} lg={14}><Panel title="串口刷写" extra={<Tag>{BOARDS[board].label} / ESP32-C3</Tag>}>
         <Flex vertical gap={12}>
           <Flex wrap align="center" justify="space-between" gap={8}>
             <Typography.Text>{chip ? `${chip.name} · ${chip.mac} · ${chip.flashSize / 1048576} MB` : '未连接串口'}</Typography.Text>
-            {chip ? <Button disabled={busy} onClick={() => run(async () => { await flasher.current!.disconnect(); setChip(undefined); setStage('等待连接串口'); })} icon={<DisconnectOutlined/>}>释放串口</Button> : <Button type="primary" disabled={!supported || monitoring} loading={busy} icon={<UsbOutlined/>} onClick={() => run(async () => { setChip(await flasher.current!.connect()); })}>选择串口</Button>}
+            {chip ? <Button disabled={busy || !!waiting} onClick={() => run(async () => { await flasher.current!.disconnect(); setChip(undefined); setStage('等待连接串口'); })} icon={<DisconnectOutlined/>}>释放串口</Button> : <Button type="primary" disabled={!supported || monitoring || !!waiting} loading={busy} icon={<UsbOutlined/>} onClick={() => run(async () => { setChip(await flasher.current!.connect()); })}>选择串口</Button>}
           </Flex>
-          <Form layout="vertical" disabled={busy}>
+          <Form layout="vertical" disabled={busy || !!waiting || monitoring}>
+            <Form.Item label="设备板型"><Select aria-label="设备板型" value={board} onChange={value => { setBoard(value); setMode(value === 'ai-passport' ? 'firmware' : 'config'); setFirmware(undefined); }} options={Object.entries(BOARDS).map(([value, item]) => ({ value, label: item.label }))}/></Form.Item>
+            {board === 'ai-passport' && <Alert type="info" showIcon title="FoloToy AI Passport · ESP32-C3 · 8 MB" description="已安装小智固件可仅配置本地连接；其他固件请选完整固件。无法通过芯片型号自动区分板型，请确认实物。"/>}
             <Form.Item label="刷写内容" tooltip="选择串口会重启设备并进入下载模式。写入前自动备份 NVS。"><Select value={mode} onChange={setMode} options={[{ label: '仅配置本地连接', value: 'config' }, { label: '完整固件', value: 'firmware' }]}/></Form.Item>
-            {mode === 'firmware' && <Form.Item label="固件" extra="选择匹配 WHA103、从 0x0 开始的合并固件。"><Upload accept=".bin" maxCount={1} beforeUpload={file => { setFirmware(file); return false; }} onRemove={() => setFirmware(undefined)}><Button icon={<UploadOutlined/>}>选择 .bin 文件</Button></Upload></Form.Item>}
+            {mode === 'firmware' && board === 'ai-passport' && <Form.Item label="固件来源"><Typography.Paragraph>内置 Passport 小智 {PASSPORT_FIRMWARE.version}</Typography.Paragraph><Typography.Link href={PASSPORT_FIRMWARE.release} target="_blank">固件发布来源</Typography.Link></Form.Item>}
+            {mode === 'firmware' && board !== 'ai-passport' && <Form.Item label="固件" extra={`选择匹配 ${BOARDS[board].label}、从 0x0 开始的合并固件。`}><Upload key={board} accept=".bin" maxCount={1} beforeUpload={file => { setFirmware(file); return false; }} onRemove={() => setFirmware(undefined)}><Button icon={<UploadOutlined/>}>选择 .bin 文件</Button></Upload></Form.Item>}
             <Form.Item label="连接协议"><Select value={transport} onChange={setTransport} options={[{ label: 'WebSocket', value: 'websocket' }, { label: 'MQTT + UDP', value: 'mqtt' }]}/></Form.Item>
             <Form.Item label="OTA 地址" tooltip="设备与电脑需在同一局域网。"><Typography.Text copyable>{data.connection.otaUrl}</Typography.Text></Form.Item>
             <Columns><Form.Item label="Wi-Fi 名称" validateStatus={wifiError ? 'warning' : undefined} help={wifiError || wifi.warning}><Space.Compact style={{ width: '100%' }}><AutoComplete style={{ width: '100%' }} value={ssid} onChange={setSsid} options={Array.from(new Set(wifi.networks.map(n => n.ssid))).map(name => ({ value: name, label: `${name} · ${Array.from(new Set(wifi.networks.filter(n => n.ssid === name).map(n => n.band))).join('/')}` }))} filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}><Input autoComplete="off" placeholder="选择或输入，留空保留已有网络" maxLength={32}/></AutoComplete><Button icon={<ReloadOutlined/>} loading={scanningWifi} onClick={() => void scanNetworks()}>扫描</Button></Space.Compact></Form.Item><Form.Item label="Wi-Fi 密码"><Input.Password autoComplete="new-password" value={password} onChange={e => setPassword(e.target.value)} placeholder="2.4GHz Wi-Fi" disabled={!ssid || busy} maxLength={64}/></Form.Item></Columns>
           </Form>
-          <Button type="primary" icon={<ThunderboltOutlined/>} disabled={!chip || (mode === 'firmware' && !firmware) || !!waiting || monitoring} loading={busy} onClick={() => run(flash)}>{mode === 'config' ? '写入配置并重启' : '刷写固件并重启'}</Button>
+          <Button type="primary" icon={<ThunderboltOutlined/>} disabled={!chip || (mode === 'firmware' && !firmware && !(board === 'ai-passport')) || !!waiting || monitoring} loading={busy} onClick={() => run(flash)}>{mode === 'config' ? '写入配置并重启' : '刷写固件并重启'}</Button>
           <Typography.Text type="secondary">写入前自动备份 NVS</Typography.Text>
         </Flex>
       </Panel></Col>
@@ -253,7 +272,7 @@ function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) 
     <Flex vertical gap={12}>
       <Flex justify="flex-end"><Button type="primary" htmlType="submit" loading={saving} icon={<CheckOutlined/>}>保存设置</Button></Flex>
       <Columns>
-        <Panel title="本地接入"><Columns><Form.Item name="publicHost" label="局域网 IP / 主机名" rules={[{ required: true }]}><Input placeholder="192.168.1.100"/></Form.Item><Form.Item name="defaultTransport" label="默认协议"><Select options={[{ value: 'websocket', label: 'WebSocket' }, { value: 'mqtt', label: 'MQTT + UDP' }]}/></Form.Item></Columns></Panel>
+        <Panel title="本地接入"><Form.Item name="publicHostMode" label="服务器地址"><Select options={[{ value: 'auto', label: '自动获取当前局域网 IP' }, { value: 'manual', label: '手动指定 IP / 主机名' }]}/></Form.Item><Typography.Paragraph type="secondary">当前接入地址：{data.connection.host}。自动模式跟随电脑网络变化；已写入设备的旧 OTA 地址需重新配置。</Typography.Paragraph><Columns><Form.Item noStyle shouldUpdate={(previous, current) => previous.publicHostMode !== current.publicHostMode}>{() => form.getFieldValue('publicHostMode') === 'manual' ? <Form.Item name="publicHost" label="局域网 IP / 主机名" rules={[{ required: true }]}><Input placeholder="192.168.1.100"/></Form.Item> : null}</Form.Item><Form.Item name="defaultTransport" label="默认协议"><Select options={[{ value: 'websocket', label: 'WebSocket' }, { value: 'mqtt', label: 'MQTT + UDP' }]}/></Form.Item></Columns></Panel>
         <Panel title="唤醒与断句"><Columns>
           <Form.Item name="wakeGreeting" label="唤醒回复" tooltip="设备上报唤醒事件后播报，留空关闭。" rules={[{ max: 200 }]}><Input maxLength={200} allowClear/></Form.Item>
           <Form.Item name="wakePrefix" label="语音前缀过滤" tooltip="每轮语音需以此前缀开头，留空不限。不修改设备待机唤醒词。" rules={[{ max: 80 }]}><Input maxLength={80} allowClear placeholder="留空不限制"/></Form.Item>

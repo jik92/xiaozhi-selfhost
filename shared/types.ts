@@ -4,6 +4,7 @@ import type { AiTask } from './tasks';
 
 const httpUrl = z.string().url().refine(v => /^https?:/.test(v), '请输入 HTTP / HTTPS 地址');
 export const SettingsSchema = z.object({
+  publicHostMode: z.enum(['auto', 'manual']).default('auto'),
   publicHost: z.string().min(1).max(253).regex(/^[a-zA-Z0-9.\-]+$/, '仅填写 IP 或主机名，不含端口'),
   defaultTransport: z.enum(['websocket', 'mqtt']),
   wakePrefix: z.string().trim().max(80, '语音前缀最多 80 个字符').default(''),

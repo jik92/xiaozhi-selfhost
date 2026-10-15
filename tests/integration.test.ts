@@ -33,7 +33,7 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
     mcpServer.registerTool('sum', { description: '相加', inputSchema: { a: z.number(), b: z.number() } }, async ({ a, b }) => ({ content: [{ type: 'text', text: String(a + b) }] }));
     await mcpServer.connect(transport); mcpHost = Bun.serve({ port: 0, fetch: req => transport.handleRequest(req) });
     app = await startApp({ port: 0, mqttPort, udpPort, dataDir: directory }); base = `http://127.0.0.1:${app.server.port}`;
-    const c = structuredClone(app.store.settings); c.publicHost = '127.0.0.1';
+    const c = structuredClone(app.store.settings); c.publicHost = '127.0.0.1'; c.publicHostMode = 'manual';
     c.llm = { ...c.llm, baseUrl: `http://127.0.0.1:${upstream.port}/v1`, apiKey: 'private-llm-key', model: 'chat-test' };
     c.asr = { ...c.asr, baseUrl: c.llm.baseUrl, apiKey: 'private-asr-key', model: 'asr-test' };
     c.tts = { ...c.tts, type: 'openai', baseUrl: c.llm.baseUrl, apiKey: 'private-tts-key', voice: 'test' };
@@ -42,6 +42,40 @@ describe('real network integration (mocked AI, real transports and codecs)', () 
   afterAll(async () => { await app?.close(); upstream?.stop(true); mcpHost?.stop(true); await mcpServer?.close(); if (directory) rmSync(directory, { recursive: true, force: true }); });
   async function request(path: string, body?: unknown) { return fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
   async function register(id: string, transport = 'websocket') { const r = await request('/api/provision', { id, transport, board: 'wha103' }); expect(r.ok).toBe(true); return r.json() as Promise<any>; }
+
+  test('snapshots, provisioning and OTA all use the current address after network changes', async () => {
+    const original = app.store.connectionHost;
+    let current = '192.168.0.194'; app.store.connectionHost = () => current;
+    try {
+      for (const host of ['192.168.0.194', '10.1.2.191']) {
+        current = host;
+        const snapshot = await (await request('/api/snapshot')).json() as any;
+        expect(snapshot.connection.host).toBe(host);
+        const config = await (await request('/api/provision', { id: 'dynamic-passport', transport: 'mqtt', board: 'ai-passport' })).json() as any;
+        expect(config.changes).toContainEqual({ namespace: 'wifi', key: 'ota_url', value: `http://${host}:${app.server.port}/xiaozhi/ota/` });
+        expect(config.changes).toContainEqual({ namespace: 'websocket', key: 'url', value: `ws://${host}:${app.server.port}/xiaozhi/v1/` });
+        expect(config.changes).toContainEqual({ namespace: 'mqtt', key: 'endpoint', value: `${host}:${mqttPort}` });
+        const ota = await (await fetch(base + '/xiaozhi/ota/', { method: 'POST', headers: { 'device-id': 'dynamic-passport' }, body: '{}' })).json() as any;
+        expect(ota.mqtt.endpoint).toBe(`${host}:${mqttPort}`);
+      }
+    } finally { app.store.connectionHost = original; }
+  });
+
+  test('Passport provisioning retains board identity and serves local OTA for both transports', async () => {
+    for (const transport of ['websocket', 'mqtt']) {
+      const id = `passport-${transport}`;
+      const response = await request('/api/provision', { id, transport, board: 'ai-passport', ssid: 'Passport Wi-Fi', password: 'test-only' });
+      expect(response.ok).toBe(true);
+      const config = await response.json() as any;
+      expect(config.changes).toContainEqual({ namespace: 'wifi', key: 'ssid', value: 'Passport Wi-Fi' });
+      expect(config.changes).toContainEqual({ namespace: 'wifi', key: 'ota_url', value: `${base}/xiaozhi/ota/` });
+      expect(app.store.devices.get(id)?.board).toBe('ai-passport');
+      const ota = await (await fetch(base + '/xiaozhi/ota/', { method: 'POST', headers: { 'device-id': id }, body: JSON.stringify({ application: { version: '2.5.0' }, board: { type: 'ai-passport' } }) })).json() as any;
+      if (transport === 'websocket') expect(ota.websocket.token).toBe(app.store.token(id));
+      else expect(ota.mqtt.password).toBe(app.store.token(id));
+      expect(app.store.devices.get(id)?.state).toBe('ready');
+    }
+  });
 
   test('local management hides secrets, blocks foreign origins; OTA only provisions registered devices', async () => {
     const settings = await (await request('/api/snapshot')).text(); expect(settings).not.toContain('private-llm-key'); expect(settings).toContain('••••••••');

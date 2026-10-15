@@ -34,9 +34,11 @@ bun start
 
 `PORT`、`MQTT_PORT`、`UDP_PORT`、`DATA_DIR`、`FFMPEG_PATH`、`VOICEPRINT_MODEL` 可通过环境变量覆盖。开发模式 Vite 默认代理 :18080；修改 PORT 时同步修改 Vite 代理。
 
-## 让 WHA103 连接本地
+## 让 WHA103 / FoloToy AI Passport 连接本地
 
-1. 电脑和小智连接同一个可互访的局域网。在「AI 设置」确认本机局域网 IP，不能填写 `localhost`。
+Passport 用户在「串口刷写」的「设备板型」选择 **FoloToy AI Passport**。已有小智固件可选「仅配置本地连接」；从其他固件切换请选择「完整固件」，可直接使用内置的 Passport 专用小智 `v2.5.0-folo.1`，无需另行寻找二进制。内置文件加载时校验 SHA-256。详见 [Passport 刷写说明](firmware/README.md#folotoy-ai-passport)。
+
+1. 电脑和小智连接同一个可互访的局域网。「AI 设置」默认自动获取当前局域网 IP，生成配置和下发连接地址时重新读取，优先使用默认路由的物理网卡并排除 VPN、虚拟机网卡。也可切换为手动指定 IP / 主机名，不能填写 `localhost`。设备已保存的旧 OTA IP 不会随电脑网络切换自动更新，需要重新「仅配置本地连接」；长期使用可手动指定设备能解析的稳定主机名。
 2. 用 Chrome 打开上面的 **localhost** 地址，在「串口刷写」点击「选择串口」。浏览器的设备选择和串口授权需要本人操作。
 3. 推荐选择「保留固件 · 配置本地连接」。选择 WebSocket 或 MQTT+UDP；Wi-Fi 留空会保留已有网络。 macOS 可点击 Wi-Fi 名称旁的「扫描」，选择本机附近的网络（标注频段，优先显示 2.4GHz），也可手动输入；扫描需要 Swift 命令行工具，系统可能要求为启动服务的终端或应用开启定位权限。扫描不会读取密码或切换电脑网络。
 4. 点击「写入本地配置并重启」。工具先下载原 NVS 备份，再追加本地连接参数、校验并重启。
@@ -44,7 +46,7 @@ bun start
 
 配置过程写入 `wifi.ota_url`、WebSocket 与 MQTT 参数；保留其他 NVS 条目和非 NVS 分区。设备令牌在本机生成，通过本地 OTA 下发，无需小智官方账号。切换协议后需要重新配置或让设备重新读取 OTA。
 
-**当前串口自动配置适配 WHA103 / ESP32-C3、ESP-IDF NVS v2、0x8000 分区表与厂商固件的 `wifi.ssid/password` 配置。** 不是所有 ESP32 板子的通用配网器。加密 NVS、损坏分区、空间不足、其他芯片都会拒绝写入；不会猜测引脚或擦除整片 Flash。
+**当前串口自动配置适配 WHA103 和 FoloToy AI Passport / ESP32-C3、ESP-IDF NVS v2、0x8000 分区表与兼容小智固件的 `wifi.ssid/password` 配置。** 不是所有 ESP32 板子的通用配网器。加密 NVS、损坏分区、空间不足、其他芯片都会拒绝写入；不会猜测引脚或擦除整片 Flash。
 
 已有可用固件也可不使用串口：先在「设备与对话」登记 MAC，再在小智配网页面高级选项填入本地 OTA 地址并重启。
 

@@ -17,3 +17,5 @@ backups/
 *.token
 *.pem
 *.key
+
+!public/firmware/folo-ai-passport-xiaozhi-v2.5.0.bin

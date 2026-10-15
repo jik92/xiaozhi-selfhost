@@ -25,7 +25,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
   const root = resolve('dist');
   let mqtt: Awaited<ReturnType<typeof startMqtt>> | undefined;
   let activePort = port;
-  function connection(): Snapshot['connection'] { const host = store.settings.publicHost; return { host, port: activePort, mqttPort, udpPort, otaUrl: `http://${host}:${activePort}/xiaozhi/ota/`, websocketUrl: `ws://${host}:${activePort}/xiaozhi/v1/` }; }
+  function connection(): Snapshot['connection'] { const host = store.connectionHost(); return { host, port: activePort, mqttPort, udpPort, otaUrl: `http://${host}:${activePort}/xiaozhi/ota/`, websocketUrl: `ws://${host}:${activePort}/xiaozhi/v1/` }; }
   function snapshot(): Snapshot { return { devices: [...store.devices.values()], logs: store.db.query('SELECT * FROM logs ORDER BY id DESC LIMIT 150').all().reverse() as Snapshot['logs'], messages: store.messages(), settings: store.publicSettings(), tasks: tasks.list(), endpoints: store.endpoints().map(e => ({ ...e, token: e.token ? '••••••••' : '' })), speakers: store.speakers(), connection: connection(), health: { ffmpeg: !!Bun.which(process.env.FFMPEG_PATH || 'ffmpeg'), aiConfigured: !!store.settings.llm.apiKey, voiceprintModel: providers.speaker.available() } }; }
   const server = Bun.serve<WsData>({
     port, hostname: '0.0.0.0', maxRequestBodySize: 24 * 1024 * 1024, idleTimeout: 120,
@@ -58,7 +58,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           store.device(id, { board: String(body.board?.type || body.board?.name || registered.board || ''), firmware: String(body.application?.version || ''), transport, lastSeen: Date.now(), state: manager.sessions.has(id) ? store.devices.get(id)?.state : 'ready' });
           store.log('success', 'OTA', `已下发本地 ${transport === 'mqtt' ? 'MQTT+UDP' : 'WebSocket'} 连接参数`, id);
           const result: Json = { server_time: { timestamp: Date.now(), timezone_offset: 480 }, firmware: { version: String(body.application?.version || '0.0.0'), url: '' } };
-          if (transport === 'mqtt') result.mqtt = { endpoint: `${store.settings.publicHost}:${mqttPort}`, client_id: `xiaozhi_${id.replaceAll(':', '_')}`, username: id, password: store.token(id), publish_topic: `xiaozhi/${id}/up`, subscribe_topic: `xiaozhi/${id}/down`, keepalive: 120 };
+          if (transport === 'mqtt') result.mqtt = { endpoint: `${store.connectionHost()}:${mqttPort}`, client_id: `xiaozhi_${id.replaceAll(':', '_')}`, username: id, password: store.token(id), publish_topic: `xiaozhi/${id}/up`, subscribe_topic: `xiaozhi/${id}/down`, keepalive: 120 };
           else result.websocket = { url: connection().websocketUrl, token: store.token(id), version: 1 };
           return json(result);
         }
@@ -104,7 +104,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           const changes: { namespace: string; key: string; value: string | number }[] = [
             { namespace: 'wifi', key: 'ota_url', value: connection().otaUrl },
             { namespace: 'websocket', key: 'url', value: connection().websocketUrl }, { namespace: 'websocket', key: 'token', value: token }, { namespace: 'websocket', key: 'version', value: 1 },
-            { namespace: 'mqtt', key: 'endpoint', value: input.transport === 'mqtt' ? `${store.settings.publicHost}:${mqttPort}` : '' },
+            { namespace: 'mqtt', key: 'endpoint', value: input.transport === 'mqtt' ? `${store.connectionHost()}:${mqttPort}` : '' },
             { namespace: 'mqtt', key: 'client_id', value: `xiaozhi_${input.id.replaceAll(':', '_')}` }, { namespace: 'mqtt', key: 'username', value: input.id }, { namespace: 'mqtt', key: 'password', value: token },
             { namespace: 'mqtt', key: 'publish_topic', value: `xiaozhi/${input.id}/up` }, { namespace: 'mqtt', key: 'subscribe_topic', value: `xiaozhi/${input.id}/down` }, { namespace: 'mqtt', key: 'keepalive', value: 120 },
           ];
