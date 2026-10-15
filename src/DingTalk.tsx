@@ -29,7 +29,7 @@ export default function DingTalk({ data, visible }: { data: Snapshot; visible: b
   return <Flex vertical gap={12}>
     <Card size="small" title="钉钉消息通知" extra={<Space><Tag color={state?.status === 'connected' ? 'success' : 'default'}>{state ? statusLabels[state.status] : '读取中'}</Tag><Button icon={<ReloadOutlined/>} onClick={() => void refresh()}>刷新状态</Button></Space>}>
       <Flex vertical gap={12}>
-        <Alert type="info" showIcon title="Stream 模式 · 收到消息后主动播报" description="在钉钉开发者后台创建并发布应用机器人，接收模式选择 Stream。支持与机器人单聊、群内 @ 机器人的文本消息。使用当前「角色与语音」的人设和音色播报，无需配置公网回调或 Webhook。"/>
+        <Alert type="info" showIcon title="Stream 模式 · 收到消息后主动播报" description="在钉钉开发者后台创建并发布应用机器人，接收模式选择 Stream。接收与机器人单聊、群内 @机器人的文本消息，无法接收群内未 @机器人的普通消息。使用当前「角色与语音」的人设和音色播报，无需配置公网回调或 Webhook。"/>
         {(error || state?.error) && <Alert type="warning" showIcon title={error || state?.error}/>}
         <Form form={form} layout="vertical" onFinish={async values => {
           setSaving(true);
