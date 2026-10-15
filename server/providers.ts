@@ -2,6 +2,8 @@ import { EdgeTTS } from 'node-edge-tts';
 import type { Store } from './store';
 import type { Json } from '../shared/types';
 import { LocalSpeaker } from './speaker';
+import { edgeSpeechOptions, speechVoice } from '../shared/roles';
+import { pcmToWav, toPcm } from './audio';
 
 export function endpoint(base: string, path: string) { return `${base.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`; }
 async function checked(response: Response) {
@@ -43,17 +45,25 @@ export class Providers {
   }
   async synthesize(text: string, signal?: AbortSignal): Promise<Uint8Array> {
     const c = this.store.settings.tts;
+    const speech = this.store.settings.speech;
+    const voice = speechVoice(this.store.settings);
     if (signal?.aborted) throw new Error('操作已取消');
     if (c.type === 'edge') {
-      const tts = new EdgeTTS({ voice: c.voice, lang: 'zh-CN', timeout: 20000, outputFormat: 'audio-24khz-48kbitrate-mono-mp3' });
+      const tts = new EdgeTTS({ ...edgeSpeechOptions(this.store.settings), timeout: 20000, outputFormat: 'audio-24khz-48kbitrate-mono-mp3' });
       const buffers: Buffer[] = [];
       for await (const piece of tts.streamAudio(text)) { if (signal?.aborted) throw new Error('操作已取消'); if (Buffer.isBuffer(piece)) buffers.push(piece); }
       if (!buffers.length) throw new Error('Edge TTS 没有返回音频，可切换兼容语音合成接口');
       return Buffer.concat(buffers);
     }
     if (!c.apiKey) throw new Error('请配置语音合成密钥');
-    const r = await checked(await fetch(endpoint(c.baseUrl, 'audio/speech'), { method: 'POST', headers: { Authorization: `Bearer ${c.apiKey}`, 'Content-Type': 'application/json' }, signal: requestSignal(signal), body: JSON.stringify({ model: c.model, voice: c.voice, input: text, response_format: 'mp3' }) }));
-    return new Uint8Array(await r.arrayBuffer());
+    const r = await checked(await fetch(endpoint(c.baseUrl, 'audio/speech'), { method: 'POST', headers: { Authorization: `Bearer ${c.apiKey}`, 'Content-Type': 'application/json' }, signal: requestSignal(signal), body: JSON.stringify({ model: c.model, voice, input: text, response_format: 'mp3' }) }));
+    const audio = new Uint8Array(await r.arrayBuffer());
+    if (speech.replySpeed === 'normal' && speech.pitch === 'normal') return audio;
+    // Apply both controls locally so compatible services need no extra API parameters.
+    const speed = { slow: 0.8, normal: 1, fast: 1.2 }[speech.replySpeed];
+    const pitch = 2 ** ({ low: -2, normal: 0, high: 2 }[speech.pitch] / 12);
+    const filters = `aresample=24000,asetrate=${Math.round(24000 * pitch)},aresample=24000,atempo=${speed / pitch}`;
+    return pcmToWav(await toPcm(audio, 24000, signal, filters), 24000);
   }
   async identify(wav: Buffer, signal?: AbortSignal): Promise<string | undefined> {
     const c = this.store.settings.voiceprint;

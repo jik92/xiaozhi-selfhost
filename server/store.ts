@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 import { SettingsSchema, type Settings, type Device, type LogEvent, type Json, type McpEndpoint, type Speaker } from '../shared/types';
+import { BrowserAudioCache } from './browser-audio';
 
 export function localHost() {
   for (const [name, addresses] of Object.entries(networkInterfaces())) {
@@ -19,6 +20,7 @@ export class Store {
   listeners = new Set<(event: Json) => void>();
   settings: Settings;
   secret: string;
+  browserAudio = new BrowserAudioCache();
   constructor(public dir = process.env.DATA_DIR || 'data') {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     this.db = new Database(`${dir}/xiaozhi.sqlite`, { create: true });
@@ -72,5 +74,5 @@ export class Store {
   verify(id: string, token: string) { const expected = this.token(id); return token.length === expected.length && timingSafeEqual(Buffer.from(expected), Buffer.from(token)); }
   endpoints(): McpEndpoint[] { return this.get('mcp') || []; }
   speakers(): Speaker[] { return this.get('speakers') || []; }
-  close() { this.db.close(); }
+  close() { this.browserAudio.clear(); this.db.close(); }
 }

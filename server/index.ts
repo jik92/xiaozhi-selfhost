@@ -9,6 +9,8 @@ import { startMqtt } from './mqtt';
 import { unwrapAudio, wrapAudio } from './protocol';
 import { pcmToWav, toPcm } from './audio';
 import type { Json, McpEndpoint, Speaker, Snapshot } from '../shared/types';
+import { TaskScheduler } from './tasks';
+import { BUILTIN_ID } from './builtin-tools';
 
 const deviceIdSchema = z.string().regex(/^[a-zA-Z0-9:_-]{1,80}$/);
 const textSchema = z.object({ text: z.string().trim().min(1).max(4000) });
@@ -18,11 +20,12 @@ type WsData = { kind: 'events'; listener?: (event: Json) => void } | { kind: 'de
 export async function startApp(options: { port?: number; mqttPort?: number; udpPort?: number; dataDir?: string; transports?: boolean } = {}) {
   const port = options.port ?? Number(process.env.PORT || 18080); const mqttPort = options.mqttPort ?? Number(process.env.MQTT_PORT || 18883); const udpPort = options.udpPort ?? Number(process.env.UDP_PORT || 18884);
   const store = new Store(options.dataDir); const providers = new Providers(store); const mcp = new McpManager(store); const manager = new SessionManager(store, providers, mcp);
+  const tasks = new TaskScheduler(store, (task, signal) => manager.runTask(task.deviceId, task.prompt, signal));
   const root = resolve('dist');
   let mqtt: Awaited<ReturnType<typeof startMqtt>> | undefined;
   let activePort = port;
   function connection(): Snapshot['connection'] { const host = store.settings.publicHost; return { host, port: activePort, mqttPort, udpPort, otaUrl: `http://${host}:${activePort}/xiaozhi/ota/`, websocketUrl: `ws://${host}:${activePort}/xiaozhi/v1/` }; }
-  function snapshot(): Snapshot { return { devices: [...store.devices.values()], logs: store.db.query('SELECT * FROM logs ORDER BY id DESC LIMIT 150').all().reverse() as Snapshot['logs'], messages: store.db.query('SELECT * FROM messages ORDER BY id DESC LIMIT 200').all().reverse() as Snapshot['messages'], settings: store.publicSettings(), endpoints: store.endpoints().map(e => ({ ...e, token: e.token ? '••••••••' : '' })), speakers: store.speakers(), connection: connection(), health: { ffmpeg: !!Bun.which(process.env.FFMPEG_PATH || 'ffmpeg'), aiConfigured: !!store.settings.llm.apiKey, voiceprintModel: providers.speaker.available() } }; }
+  function snapshot(): Snapshot { return { devices: [...store.devices.values()], logs: store.db.query('SELECT * FROM logs ORDER BY id DESC LIMIT 150').all().reverse() as Snapshot['logs'], messages: store.db.query('SELECT * FROM messages ORDER BY id DESC LIMIT 200').all().reverse() as Snapshot['messages'], settings: store.publicSettings(), tasks: tasks.list(), endpoints: store.endpoints().map(e => ({ ...e, token: e.token ? '••••••••' : '' })), speakers: store.speakers(), connection: connection(), health: { ffmpeg: !!Bun.which(process.env.FFMPEG_PATH || 'ffmpeg'), aiConfigured: !!store.settings.llm.apiKey, voiceprintModel: providers.speaker.available() } }; }
   const server = Bun.serve<WsData>({
     port, hostname: '0.0.0.0', maxRequestBodySize: 24 * 1024 * 1024, idleTimeout: 120,
     async fetch(req, server) {
@@ -59,9 +62,32 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           return json(result);
         }
         if (path === '/api/snapshot') return json(snapshot());
+        const browserAudioRoute = path.match(/^\/api\/browser-audio\/([a-zA-Z0-9-]+)$/);
+        if (browserAudioRoute && req.method === 'GET') {
+          const audio = store.browserAudio.get(browserAudioRoute[1]!);
+          return audio ? new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' } }) : json({ error: '语音已过期' }, 404);
+        }
+        if (path === '/api/tasks' && req.method === 'GET') return json({ tasks: tasks.list() });
+        if (path === '/api/tasks' && req.method === 'POST') return json(tasks.save(await req.json()), 201);
+        const taskRoute = path.match(/^\/api\/tasks\/([a-zA-Z0-9_-]+)(?:\/(run|cancel))?$/);
+        if (taskRoute) {
+          const id = taskRoute[1]!;
+          if (taskRoute[2] === 'run' && req.method === 'POST') {
+            // trigger claims the run synchronously before its first await.
+            if (!tasks.list().some(t => t.id === id)) return json({ error: '任务不存在' }, 404);
+            tasks.assertRunnable(id);
+            void tasks.trigger(id).catch(e => store.log('error', '定时任务', String(e)));
+            return json({ queued: true }, 202);
+          }
+          if (taskRoute[2] === 'cancel' && req.method === 'POST') { tasks.cancel(id); return json({ ok: true }); }
+          if (req.method === 'PUT' && !taskRoute[2]) return json(tasks.save(await req.json(), id));
+          if (req.method === 'PATCH' && !taskRoute[2]) { const { enabled } = z.object({ enabled: z.boolean() }).parse(await req.json()); return json(tasks.enable(id, enabled)); }
+          if (req.method === 'DELETE' && !taskRoute[2]) { tasks.remove(id); return json({ ok: true }); }
+          return json({ error: '不支持的方法' }, 405);
+        }
         if (path === '/api/settings' && req.method === 'PUT') { store.saveSettings(await req.json()); store.log('success', '设置', '本地设置已保存'); return json({ settings: store.publicSettings(), connection: connection() }); }
         if (path === '/api/ai/test' && req.method === 'POST') { const start = Date.now(); const result = await providers.chat([{ role: 'user', content: '请只回答：连接成功' }]); return json({ text: result.content, elapsed: Date.now() - start }); }
-        if (path === '/api/tts/test' && req.method === 'POST') { const { text } = textSchema.parse(await req.json()); const audio = await providers.synthesize(text); return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg' } }); }
+        if (path === '/api/tts/test' && req.method === 'POST') { const { text } = textSchema.parse(await req.json()); const audio = await providers.synthesize(text); return new Response(new Uint8Array(audio), { headers: { 'Content-Type': Buffer.from(audio).subarray(0, 4).toString() === 'RIFF' ? 'audio/wav' : 'audio/mpeg' } }); }
         if (path === '/api/asr/test' && req.method === 'POST') { const audio = await upload(req); const pcm = await toPcm(audio, 16000); return json({ text: await providers.transcribe(pcmToWav(pcm)) }); }
         if (path === '/api/provision' && req.method === 'POST') {
           const input = z.object({ id: deviceIdSchema, transport: z.enum(['websocket', 'mqtt']), board: z.string().max(100).default('wha103'), ssid: z.string().max(32).optional(), password: z.string().max(64).optional() }).parse(await req.json());
@@ -80,6 +106,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
         }
         if (path === '/api/mcp' && req.method === 'POST') {
           const input = z.object({ id: z.string().regex(/^[a-z0-9_-]{1,32}$/).optional(), name: z.string().min(1).max(80), url: z.string().url().refine(v => /^https?:/.test(v)), transport: z.enum(['http', 'sse']), token: z.string().max(2048).default('') }).parse(await req.json());
+          if (input.id === BUILTIN_ID) throw new Error('内置工具不能被远程服务覆盖');
           if (!input.id && store.endpoints().length >= 8) throw new Error('本地工作台最多连接 8 个 MCP 服务');
           const id = input.id || `mcp_${crypto.randomUUID().slice(0, 8)}`; const old = store.endpoints().find(e => e.id === id);
           const item: McpEndpoint = { ...input, id, token: input.token === '••••••••' ? old?.token || '' : input.token };
@@ -88,7 +115,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
         const mcpRoute = path.match(/^\/api\/mcp\/([a-zA-Z0-9_-]+)(?:\/(tools|call))?$/);
         if (mcpRoute) {
           const id = mcpRoute[1]!;
-          if (req.method === 'DELETE') { await mcp.disconnect(id); store.set('mcp', store.endpoints().filter(e => e.id !== id)); return json({ ok: true }); }
+          if (req.method === 'DELETE') { if (id === BUILTIN_ID) throw new Error('内置工具不能删除'); await mcp.disconnect(id); store.set('mcp', store.endpoints().filter(e => e.id !== id)); return json({ ok: true }); }
           if (mcpRoute[2] === 'tools') return json({ tools: await mcp.list(id) });
           if (mcpRoute[2] === 'call' && req.method === 'POST') { const input = z.object({ name: z.string().min(1), arguments: z.record(z.string(), z.unknown()).default({}) }).parse(await req.json()); return json(await mcp.call(id, input.name, input.arguments)); }
         }
@@ -145,9 +172,9 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
   });
   activePort = server.port!;
   try { if (options.transports !== false) mqtt = await startMqtt(store, manager, mqttPort, udpPort); }
-  catch (e) { server.stop(true); store.close(); throw e; }
+  catch (e) { await tasks.close(); server.stop(true); store.close(); throw e; }
   store.log('success', '网关', `本地服务已启动 ${connection().otaUrl}`);
-  return { server, store, manager, providers, mcp, connection, async close() { manager.closeAll(); mqtt?.close(); providers.speaker.close(); await mcp.close(); server.stop(true); store.close(); } };
+  return { server, store, manager, providers, mcp, tasks, connection, async close() { await tasks.close(); manager.closeAll(); mqtt?.close(); providers.speaker.close(); await mcp.close(); server.stop(true); store.close(); } };
 }
 async function upload(req: Request) { const form = await req.formData(); const file = form.get('file'); if (!(file instanceof File) || !file.size || file.size > 20 * 1024 * 1024) throw new Error('请选择小于 20MB 的音频文件'); return new Uint8Array(await file.arrayBuffer()); }
 

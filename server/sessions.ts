@@ -6,6 +6,8 @@ import { Providers } from './providers';
 import { McpManager } from './mcp';
 import { createDecoder, rms, pcmToWav, encodePcm, toPcm } from './audio';
 import type { Json } from '../shared/types';
+import { runConversation, trimHistory } from './conversation';
+import { recognitionSilence } from '../shared/roles';
 
 // A null result means that this utterance should not trigger a conversation.
 export function wakeCommand(text: string, prefix: string): string | null {
@@ -22,13 +24,14 @@ export class DeviceSession {
   pcm: Buffer[] = []; pcmBytes = 0; lastVoice = 0; heard = false; mode = 'auto';
   controller?: AbortController; alive = true; tools: Json[] = []; history: Json[] = [];
   wakeGreetingController?: AbortController;
+  browserAudioId?: string;
   pending = new Map<number, { resolve: (value: Json) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   nextRpc = 1; timer: ReturnType<typeof setInterval>; lastSeen = Date.now();
   constructor(public id: string, public link: Link, private store: Store, private providers: Providers, private mcp: McpManager) {
     this.store.device(id, { online: true, state: 'connected', transport: link.kind, lastSeen: Date.now() });
     this.store.log('success', link.kind === 'mqtt' ? 'MQTT' : 'WebSocket', '设备已连接', id);
     this.timer = setInterval(() => {
-      if (this.listening && this.mode !== 'manual' && this.heard && Date.now() - this.lastVoice > this.store.settings.vad.silenceMs) void this.finishAudio();
+      if (this.listening && this.mode !== 'manual' && this.heard && Date.now() - this.lastVoice > recognitionSilence(this.store.settings)) void this.finishAudio();
       if (Date.now() - this.lastSeen > 5 * 60_000 && this.link.kind === 'websocket') this.link.close();
     }, 100);
     this.timer.unref();
@@ -138,41 +141,12 @@ export class DeviceSession {
   async chat(text: string, speaker?: string, previous?: AbortController) {
     if (this.busy) throw new Error('设备正在处理上一条请求');
     text = text.trim().slice(0, 4000); if (!text) throw new Error('请输入对话内容');
-    const controller = previous || new AbortController(); this.controller = controller; this.busy = true;
-    this.store.message(this.id, 'user', text, speaker); this.state('thinking');
+    const controller = previous || new AbortController(); this.controller = controller; this.busy = true; this.state('thinking');
     const checkpoint = this.history.length;
-    this.history.push({ role: 'user', content: text });
     try {
-      const remote = await this.mcp.available();
-      const tools = [
-        ...remote.map(t => ({ type: 'function', function: { name: t.name, description: t.tool.description || t.tool.name, parameters: t.tool.inputSchema } })),
-        ...this.tools.map(t => ({ type: 'function', function: { name: `device__${t.name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64), description: t.description || t.name, parameters: t.inputSchema } })),
-      ];
-      let answer = '';
-      for (let turn = 0; turn < 4; turn++) {
-        controller.signal.throwIfAborted();
-        const reply = await this.providers.chat([{ role: 'system', content: this.store.settings.llm.systemPrompt + (speaker ? `\n当前说话人：${speaker}` : '') }, ...this.history], tools, controller.signal);
-        this.history.push(reply);
-        if (!reply.tool_calls?.length) { answer = String(reply.content || '').trim(); break; }
-        for (const call of reply.tool_calls) {
-          controller.signal.throwIfAborted();
-          let result: unknown;
-          try {
-            const args = JSON.parse(call.function.arguments || '{}');
-            const target = remote.find(t => t.name === call.function.name);
-            const deviceTool = this.tools.find(t => `device__${t.name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) === call.function.name);
-            if (target) result = await this.mcp.call(target.id, target.tool.name, args);
-            else if (deviceTool) result = await this.rpc('tools/call', { name: deviceTool.name, arguments: args });
-            else throw new Error('工具不存在');
-          } catch (error) { result = { error: this.store.redact(String(error)) }; }
-          this.history.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
-        }
-      }
-      if (!answer) answer = '工具调用已结束，请再告诉我下一步需要做什么。';
-      controller.signal.throwIfAborted();
-      this.store.message(this.id, 'assistant', answer); await this.speak(answer, controller);
-      // Trim only complete user/assistant/tool turns, preserving tool-call pairs.
-      while (this.history.length > 24) { const nextUser = this.history.findIndex((m, i) => i > 0 && m.role === 'user'); if (nextUser < 0) break; this.history.splice(0, nextUser); }
+      const answer = await runConversation({ store: this.store, providers: this.providers, mcp: this.mcp, deviceId: this.id, text, speaker, signal: controller.signal, history: this.history, tools: this.tools, callDevice: (name, args) => this.rpc('tools/call', { name, arguments: args }) });
+      await this.speak(answer, controller);
+      trimHistory(this.history);
     } catch (error) { this.history.splice(checkpoint); this.fail(error, controller); }
     finally { if (this.controller === controller) { this.busy = false; this.state('idle'); } }
   }
@@ -188,9 +162,13 @@ export class DeviceSession {
   async play(audio: Uint8Array, text = '', existing?: AbortController) {
     if (!existing && this.busy) throw new Error('设备忙，请先停止当前播报');
     const controller = existing || new AbortController(); this.controller = controller; if (!existing) this.busy = true;
+    let relayId: string | undefined; let completed = false;
     try {
       const pcm = await toPcm(audio, 24000, controller.signal); const frames = encodePcm(pcm, this.frameMs);
       controller.signal.throwIfAborted(); this.state('speaking');
+      const browserAudio = this.store.browserAudio.add(this.id, pcmToWav(pcm, 24000), text);
+      relayId = browserAudio?.id; this.browserAudioId = relayId;
+      if (browserAudio) this.store.emit('audio', browserAudio);
       this.send({ type: 'tts', state: 'start' }); if (text) this.send({ type: 'tts', state: 'sentence_start', text });
       const start = performance.now();
       for (let i = 0; i < frames.length; i++) {
@@ -199,10 +177,16 @@ export class DeviceSession {
         this.link.audio(frames[i]!, i * this.frameMs);
         const device = this.store.devices.get(this.id); if (device) device.outputFrames++;
       }
-      if (!controller.signal.aborted) { this.send({ type: 'tts', state: 'sentence_end', text }); this.send({ type: 'tts', state: 'stop' }); }
-    } finally { if (!existing && this.controller === controller) { this.busy = false; this.state('idle'); } }
+      if (!controller.signal.aborted) { this.send({ type: 'tts', state: 'sentence_end', text }); this.send({ type: 'tts', state: 'stop' }); completed = true; }
+    } finally {
+      if (relayId && this.browserAudioId === relayId) {
+        if (!completed) this.store.emit('audio-stop', { deviceId: this.id, id: relayId });
+        this.browserAudioId = undefined;
+      }
+      if (!existing && this.controller === controller) { this.busy = false; this.state('idle'); }
+    }
   }
-  abort() { this.controller?.abort(); this.controller = undefined; this.wakeGreetingController = undefined; this.busy = false; this.listening = false; this.pcm = []; this.pcmBytes = 0; this.send({ type: 'tts', state: 'stop' }); }
+  abort() { if (this.browserAudioId) { this.store.emit('audio-stop', { deviceId: this.id, id: this.browserAudioId }); this.browserAudioId = undefined; } this.controller?.abort(); this.controller = undefined; this.wakeGreetingController = undefined; this.busy = false; this.listening = false; this.pcm = []; this.pcmBytes = 0; this.send({ type: 'tts', state: 'stop' }); }
   fail(error: unknown, controller?: AbortController) { if (!this.alive || controller?.signal.aborted) return; const message = this.store.redact(String(error)); this.store.log('error', '对话', message, this.id); this.send({ type: 'tts', state: 'stop' }); this.send({ type: 'alert', status: 'error', message, emotion: 'sad' }); }
   close() { if (!this.alive) return; this.alive = false; this.abort(); clearInterval(this.timer); this.decoder.delete(); for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('设备已断开')); } this.pending.clear(); this.store.device(this.id, { online: false, state: 'offline' }); this.store.log('info', '设备', '连接已断开', this.id); }
 }
@@ -213,5 +197,27 @@ export class SessionManager {
   open(id: string, link: Link) { const old = this.sessions.get(id); if (old) { old.close(); old.link.close(); } const session = new DeviceSession(id, link, this.store, this.providers, this.mcp); this.sessions.set(id, session); return session; }
   get(id: string) { const s = this.sessions.get(id); if (!s?.alive) throw new Error('设备尚未连接，请先配网并唤醒设备'); return s; }
   close(id: string, expected?: DeviceSession) { const s = this.sessions.get(id); if (expected && s !== expected) return; s?.close(); this.sessions.delete(id); }
+  async runTask(deviceId: string, text: string, signal: AbortSignal) {
+    const candidate = this.sessions.get(deviceId);
+    const live = candidate?.alive && !candidate.busy && !candidate.listening ? candidate : undefined;
+    const controller = new AbortController();
+    const cancel = () => controller.abort(); signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) controller.abort();
+    if (live) { live.controller = controller; live.busy = true; live.state('thinking'); }
+    try {
+      const answer = await runConversation({ store: this.store, providers: this.providers, mcp: this.mcp, deviceId, text, signal: controller.signal,
+        history: live?.history || [], tools: live?.tools, callDevice: live ? (name, args) => live.rpc('tools/call', { name, arguments: args }) : undefined });
+      let delivery: 'played' | 'offline' | 'busy' = candidate?.alive ? 'busy' : 'offline';
+      if (live?.alive && live.controller === controller) {
+        try { await live.speak(answer, controller); delivery = 'played'; }
+        catch (error) { controller.signal.throwIfAborted(); this.store.log('warn', '定时任务', `结果已保存，播报失败：${String(error)}`, deviceId); delivery = live.alive ? 'busy' : 'offline'; }
+      }
+      if (live) trimHistory(live.history);
+      return { text: answer, delivery };
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      if (live?.controller === controller) { live.busy = false; live.state('idle'); }
+    }
+  }
   closeAll() { for (const s of this.sessions.values()) { s.close(); s.link.close(); } this.sessions.clear(); }
 }

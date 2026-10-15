@@ -1,16 +1,22 @@
 import { Children, useEffect, useRef, useState } from 'react';
-import { App as AntApp, Alert, Badge, Button, Card, Col, Descriptions, Empty, Flex, Form, Grid, Input, InputNumber, Layout, Menu, Modal, Progress, Row, Select, Slider, Space, Spin, Statistic, Switch, Table, Tag, Typography, Upload } from 'antd';
+import { App as AntApp, Alert, AutoComplete, Badge, Button, Card, Col, Descriptions, Empty, Flex, Form, Grid, Input, InputNumber, Layout, Menu, Modal, Popconfirm, Progress, Row, Segmented, Select, Slider, Space, Spin, Statistic, Switch, Table, Tag, Typography, Upload } from 'antd';
 import { ApiOutlined, AudioOutlined, CheckOutlined, DashboardOutlined, DeleteOutlined, DisconnectOutlined, ExperimentOutlined, FileTextOutlined, LinkOutlined, PlayCircleOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SendOutlined, SoundOutlined, StopOutlined, ThunderboltOutlined, UploadOutlined, UsbOutlined } from '@ant-design/icons';
 import type { Json, Settings, Snapshot } from '../shared/types';
 import { api, post, upload } from './api';
 import { SerialFlasher, type ChipInfo } from './serial';
+import { EDGE_VOICES, FRIEND_ROLE } from '../shared/roles';
+import type { AiTask } from '../shared/tasks';
+import type { BrowserAudioEvent, BrowserAudioStop } from '../shared/browser-audio';
+import { BrowserSpeechPlayer, type PlaybackState } from './browser-audio';
 
-type Page = 'overview' | 'flash' | 'devices' | 'ai' | 'voice' | 'mcp' | 'logs';
+type Page = 'overview' | 'flash' | 'devices' | 'ai' | 'tasks' | 'roles' | 'voice' | 'mcp' | 'logs';
 const pages = [
   { key: 'overview', label: '概览', icon: <DashboardOutlined/> },
   { key: 'flash', label: '串口刷写', icon: <UsbOutlined/> },
   { key: 'devices', label: '设备与对话', icon: <RobotOutlined/> },
   { key: 'ai', label: 'AI 设置', icon: <ExperimentOutlined/> },
+  { key: 'tasks', label: 'AI 定时任务', icon: <ReloadOutlined/> },
+  { key: 'roles', label: '角色与语音', icon: <SoundOutlined/> },
   { key: 'voice', label: '声纹', icon: <AudioOutlined/> },
   { key: 'mcp', label: 'MCP', icon: <ApiOutlined/> },
   { key: 'logs', label: '日志', icon: <FileTextOutlined/> },
@@ -32,12 +38,14 @@ function useSnapshot() {
       ws.onopen = () => { setConnected(true); setError(''); };
       ws.onmessage = event => {
         const e = JSON.parse(event.data); if (e.type === 'snapshot') { setData(e.data); return; }
+        if (e.type === 'audio' || e.type === 'audio-stop') { window.dispatchEvent(new CustomEvent(`xiaozhi:${e.type}`, { detail: e.data })); return; }
         setData(d => {
           if (!d) return d;
           if (e.type === 'log') return { ...d, logs: [...d.logs, e.data].slice(-150) };
           if (e.type === 'message') return { ...d, messages: [...d.messages, e.data].slice(-200) };
           if (e.type === 'device') return { ...d, devices: [...d.devices.filter(v => v.id !== e.data.id), e.data] };
           if (e.type === 'settings') return { ...d, settings: e.data };
+          if (e.type === 'tasks') return { ...d, tasks: e.data };
           return d;
         });
       };
@@ -72,6 +80,8 @@ export default function App() {
           <div hidden={page !== 'flash'}><Flash data={data} refresh={refresh} navigate={navigate}/></div>
           {page === 'devices' && <Devices data={data} refresh={refresh}/>}
           {page === 'ai' && <AiSettings data={data} refresh={refresh}/>}
+          {page === 'tasks' && <Tasks data={data} refresh={refresh}/>}
+          {page === 'roles' && <RoleSettings data={data} refresh={refresh}/>}
           {page === 'voice' && <Voice data={data} refresh={refresh}/>}
           {page === 'mcp' && <Mcp data={data} refresh={refresh}/>}
           {page === 'logs' && <Logs data={data}/>}
@@ -86,7 +96,7 @@ function Overview({ data, navigate }: { data: Snapshot; navigate: (p: Page) => v
     <Row gutter={[12, 12]}>{[
       { title: '在线设备', value: data.devices.filter(d => d.online).length, suffix: `/ ${data.devices.length}` },
       { title: '对话记录', value: data.messages.filter(m => m.role === 'user').length },
-      { title: 'MCP 服务', value: data.endpoints.length },
+      { title: 'MCP 服务', value: data.endpoints.length + 1 },
       { title: '已登记声纹', value: data.speakers.filter(s => s.enrolled).length },
     ].map(s => <Col key={s.title} xs={12} md={6}><Card size="small"><Statistic {...s}/></Card></Col>)}</Row>
     <Columns>
@@ -171,8 +181,18 @@ function Flash({ data, refresh, navigate }: { data: Snapshot; refresh: () => voi
 function Devices({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   const { message } = AntApp.useApp(); const [selected, setSelected] = useState(''); const [text, setText] = useState(''); const [busy, setBusy] = useState(false); const [register, setRegister] = useState(false); const [mac, setMac] = useState(''); const [protocol, setProtocol] = useState('websocket'); const [tools, setTools] = useState<Json[]>([]); const [tool, setTool] = useState(''); const [args, setArgs] = useState('{}'); const [result, setResult] = useState('');
   const id = selected || data.devices[0]?.id; const device = data.devices.find(d => d.id === id); const chatEnd = useRef<HTMLDivElement>(null);
+  const [webAudio, setWebAudio] = useState(() => { try { return localStorage.getItem('xiaozhi-web-audio') !== 'off'; } catch { return true; } });
+  const [playback, setPlayback] = useState<PlaybackState>({ status: 'idle' }); const speechPlayer = useRef<BrowserSpeechPlayer | null>(null);
+  useEffect(() => {
+    const player = new BrowserSpeechPlayer(new Audio(), setPlayback); speechPlayer.current = player;
+    const audio = (event: Event) => player.enqueue((event as CustomEvent<BrowserAudioEvent>).detail);
+    const stop = (event: Event) => player.interrupt((event as CustomEvent<BrowserAudioStop>).detail);
+    window.addEventListener('xiaozhi:audio', audio); window.addEventListener('xiaozhi:audio-stop', stop);
+    return () => { window.removeEventListener('xiaozhi:audio', audio); window.removeEventListener('xiaozhi:audio-stop', stop); player.dispose(); speechPlayer.current = null; };
+  }, []);
+  useEffect(() => { speechPlayer.current?.configure(id, webAudio); try { localStorage.setItem('xiaozhi-web-audio', webAudio ? 'on' : 'off'); } catch {} }, [id, webAudio]);
   const messages = data.messages.filter(m => m.deviceId === id); useEffect(() => { chatEnd.current?.scrollIntoView({ block: 'nearest' }); }, [data.messages]);
-  async function action(kind: string) { if (!id) return; setBusy(true); try { await post(`/devices/${encodeURIComponent(id)}/${kind}`, { text }); if (kind !== 'abort') setText(''); message.success(kind === 'abort' ? '已停止播报' : '请求已提交，结果见对话和日志'); } catch (e) { message.error(String(e)); } finally { setBusy(false); } }
+  async function action(kind: string) { if (!id) return; if (kind === 'abort') speechPlayer.current?.stop(); setBusy(true); try { await post(`/devices/${encodeURIComponent(id)}/${kind}`, { text }); if (kind !== 'abort') setText(''); message.success(kind === 'abort' ? '已停止播报' : '请求已提交，结果见对话和日志'); } catch (e) { message.error(String(e)); } finally { setBusy(false); } }
   return <Row gutter={[12, 12]}>
     <Col xs={24} lg={6}><Panel title="设备" extra={<Button icon={<PlusOutlined/>} onClick={() => setRegister(true)}>登记</Button>}>
       {data.devices.length ? <Menu mode="inline" selectedKeys={id ? [id] : []} onClick={({ key }) => { setSelected(key); setTools([]); setTool(''); setResult(''); }} items={data.devices.map(d => ({ key: d.id, label: <Space><Badge status={d.online ? 'success' : 'default'}/>{d.name}</Space>, title: `${d.board} · ${d.id}` }))}/> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无设备"/>}
@@ -186,6 +206,12 @@ function Devices({ data, refresh }: { data: Snapshot; refresh: () => void }) {
     <Col xs={24} lg={18}><Flex vertical gap={12}>
       <Panel title={<Space>{device?.name || '设备对话'}{device && <Status online={device.online} text={states[device.state] || device.state}/>}</Space>} extra={device && <Tag>{device.transport === 'mqtt' ? 'MQTT + UDP' : 'WebSocket'}</Tag>}>
         <Flex vertical gap={12}>
+          <Flex justify="space-between" align="center" wrap gap={8}>
+            <Space><Switch checked={webAudio} onChange={setWebAudio} aria-label="网页自动播报"/><Typography.Text>网页自动播报</Typography.Text>{playback.status === 'playing' && <Tag color="blue">播放中</Tag>}{playback.status === 'loading' && <Tag>加载中</Tag>}</Space>
+            <Button icon={<StopOutlined/>} disabled={playback.status === 'idle'} onClick={() => speechPlayer.current?.stop()}>停止网页声音</Button>
+          </Flex>
+          {playback.status === 'blocked' && <Alert type="info" showIcon title="点击一次开启网页声音" action={<Button type="primary" onClick={() => speechPlayer.current?.resume()}>点击播放</Button>}/>}
+          {playback.status === 'error' && <Alert type="warning" showIcon title={playback.error}/>}
           <div className="chat-history">{messages.length ? messages.map(m => <Card size="small" key={m.id} style={{ marginBottom: 8 }}>
             <Flex vertical gap={4}><Space><Typography.Text strong>{m.role === 'user' ? m.speaker || '用户' : m.role === 'broadcast' ? '播报' : '小智'}</Typography.Text><Typography.Text type="secondary">{shortTime(m.time)}</Typography.Text></Space><Typography.Text style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</Typography.Text></Flex>
           </Card>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={device?.online ? '暂无对话' : '请先唤醒设备'}/>}<div ref={chatEnd}/></div>
@@ -210,7 +236,7 @@ function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) 
   const [form] = Form.useForm<Settings>(); const { message } = AntApp.useApp(); const [saving, setSaving] = useState(false); const [testing, setTesting] = useState(''); const [testResult, setTestResult] = useState(''); const audio = useRef<HTMLAudioElement | null>(null); const audioUrl = useRef('');
   useEffect(() => { form.setFieldsValue(data.settings); }, [JSON.stringify(data.settings)]);
   useEffect(() => () => { audio.current?.pause(); if (audioUrl.current) URL.revokeObjectURL(audioUrl.current); }, []);
-  async function save() { const values = await form.validateFields(); await api('/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(values) }); refresh(); }
+  async function save() { const values = await form.validateFields(); await api('/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...data.settings, ...values }) }); refresh(); }
   async function test(kind: string) { setTesting(kind); try { await save(); if (kind === 'llm') { const r = await post('/ai/test'); setTestResult(`${r.text} · ${r.elapsed}ms`); message.success('模型连接成功'); } else { const r = await fetch('/api/tts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '你好，我是小智。现在连接的是你的本地环境。' }) }); if (!r.ok) throw new Error((await r.json()).error); audio.current?.pause(); if (audioUrl.current) URL.revokeObjectURL(audioUrl.current); audioUrl.current = URL.createObjectURL(await r.blob()); audio.current = new Audio(audioUrl.current); await audio.current.play(); message.success('语音合成成功，正在浏览器试听'); } } catch (e) { message.error(String(e)); } finally { setTesting(''); } }
   return <Form form={form} layout="vertical" initialValues={data.settings} onFinish={async () => { setSaving(true); try { await save(); message.success('设置已保存'); } catch (e) { message.error(String(e)); } finally { setSaving(false); } }}>
     <Flex vertical gap={12}>
@@ -229,7 +255,7 @@ function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) 
           <Form.Item name={['llm', 'baseUrl']} label="API Base URL" rules={[{ required: true }]}><Input/></Form.Item>
           <Form.Item name={['llm', 'model']} label="模型" rules={[{ required: true }]}><Input/></Form.Item>
           <Form.Item name={['llm', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item>
-          <Form.Item name={['llm', 'systemPrompt']} label="角色设定"><Input.TextArea rows={3}/></Form.Item>
+          <Form.Item name={['llm', 'systemPrompt']} label="默认角色设定" tooltip="启用角色后，使用「角色与语音」中的介绍。"><Input.TextArea rows={3}/></Form.Item>
         </Panel>
         <Panel title="语音识别">
           <Form.Item name={['asr', 'type']} label="服务"><Select options={[{ label: 'Qwen ASR', value: 'qwen' }, { label: 'OpenAI / Whisper', value: 'openai' }]}/></Form.Item>
@@ -240,7 +266,7 @@ function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) 
         </Panel>
         <Panel title="语音合成" extra={<Button icon={<PlayCircleOutlined/>} loading={testing === 'tts'} onClick={() => test('tts')}>试听</Button>}>
           <Form.Item name={['tts', 'type']} label="服务"><Select options={[{ label: 'Edge TTS', value: 'edge' }, { label: 'OpenAI 兼容', value: 'openai' }]}/></Form.Item>
-          <Form.Item name={['tts', 'voice']} label="音色"><Input placeholder="zh-CN-XiaoxiaoNeural"/></Form.Item>
+          <Form.Item name={['tts', 'voice']} label="默认音色" tooltip="启用角色后，使用角色对应的音色。"><Input placeholder="zh-CN-XiaoxiaoNeural"/></Form.Item>
           <Form.Item name={['tts', 'baseUrl']} label="API Base URL" tooltip="Edge TTS 不使用此项。"><Input/></Form.Item>
           <Form.Item name={['tts', 'model']} label="模型"><Input/></Form.Item>
           <Form.Item name={['tts', 'apiKey']} label="API Key"><Input.Password autoComplete="new-password"/></Form.Item>
@@ -250,6 +276,152 @@ function AiSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) 
       {testResult && <Alert type="success" title={testResult} closable onClose={() => setTestResult('')}/>}
     </Flex>
     <Form.Item name={['voiceprint', 'mode']} hidden><Input/></Form.Item><Form.Item name={['voiceprint', 'enabled']} hidden valuePropName="checked"><Switch/></Form.Item><Form.Item name={['voiceprint', 'baseUrl']} hidden><Input/></Form.Item><Form.Item name={['voiceprint', 'apiKey']} hidden><Input/></Form.Item><Form.Item name={['voiceprint', 'threshold']} hidden><InputNumber/></Form.Item>
+  </Form>;
+}
+
+const beijingTime = (value?: number) => value ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(value) : '—';
+function Tasks({ data, refresh }: { data: Snapshot; refresh: () => void }) {
+  const { message } = AntApp.useApp(); const [form] = Form.useForm();
+  const [open, setOpen] = useState(false); const [editing, setEditing] = useState<string>(); const [saving, setSaving] = useState(false);
+  const kind = Form.useWatch('kind', form) || 'interval', repeat = Form.useWatch('repeat', form) || 'daily';
+  function edit(task?: AiTask) {
+    setEditing(task?.id); form.resetFields();
+    const seconds = task?.schedule.seconds || 300, unit = seconds % 3600 === 0 ? 3600 : seconds % 60 === 0 ? 60 : 1;
+    form.setFieldsValue({ name: task?.name || '', prompt: task?.prompt || '', deviceId: task?.deviceId || data.devices[0]?.id,
+      enabled: task?.enabled ?? true, kind: task?.schedule.kind || 'interval', amount: seconds / unit, unit,
+      repeat: task?.schedule.repeat || 'daily', time: task?.schedule.time || '09:00',
+      dateTime: new Date((task?.schedule.runAt || Date.now() + 5 * 60000) + 8 * 3600000).toISOString().slice(0, 16) });
+    setOpen(true);
+  }
+  async function action(path: string, method = 'POST', body?: unknown) {
+    try { await api(`/tasks/${path}`, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) }); refresh(); }
+    catch (e) { message.error(String(e)); }
+  }
+  const statuses = { idle: ['default', '未执行'], running: ['blue', '执行中'], success: ['green', '成功'], error: ['red', '失败'] } as const;
+  function scheduleText(task: AiTask) {
+    const s = task.schedule;
+    if (s.kind === 'scheduled') return s.repeat === 'daily' ? `每天 ${s.time}` : `定时 ${beijingTime(s.runAt)}`;
+    const seconds = s.seconds!, duration = seconds % 3600 === 0 ? `${seconds / 3600} 小时` : seconds % 60 === 0 ? `${seconds / 60} 分钟` : `${seconds} 秒`;
+    return s.kind === 'interval' ? `每 ${duration}` : `延迟 ${duration} 一次`;
+  }
+  return <Panel title="AI 定时任务" extra={<Button type="primary" icon={<PlusOutlined/>} onClick={() => edit()}>新增任务</Button>}>
+    <Flex vertical gap={12}>
+      <Typography.Text type="secondary">以用户消息触发小欧。离线仍执行并保存结果，在线空闲时播报；服务关闭时不触发。</Typography.Text>
+      <Table rowKey="id" size="small" dataSource={data.tasks || []} scroll={{ x: 1000 }} pagination={{ pageSize: 10 }} expandable={{ expandedRowRender: task => <Flex vertical gap={8}>
+        <Typography.Text strong>发给小欧的话</Typography.Text><Typography.Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{task.prompt}</Typography.Paragraph>
+        <Typography.Text type="secondary">设备：{data.devices.find(d => d.id === task.deviceId)?.name || task.deviceId} · 已执行 {task.runCount} 次</Typography.Text>
+        {task.lastError && <Alert type="error" title={task.lastError}/>}
+        {task.lastResult && <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', margin: 0 }} copyable>{task.lastResult}</Typography.Paragraph>}
+      </Flex> }} columns={[
+        { title: '任务', dataIndex: 'name', width: 160, ellipsis: true },
+        { title: '启用', width: 65, render: (_, task) => <Switch checked={task.enabled} onChange={enabled => action(task.id, 'PATCH', { enabled })}/> },
+        { title: '触发方式（北京时间）', width: 190, render: (_, task) => scheduleText(task) },
+        { title: '下次触发', width: 150, render: (_, task) => beijingTime(task.nextRunAt) },
+        { title: '最近执行', width: 150, render: (_, task) => beijingTime(task.lastRunAt) },
+        { title: '状态', width: 140, render: (_, task) => <Space><Tag color={statuses[task.lastStatus][0]}>{statuses[task.lastStatus][1]}</Tag>{task.lastStatus === 'success' && <Typography.Text type="secondary">{task.lastDelivery === 'played' ? '已播报' : '结果已保存'}</Typography.Text>}</Space> },
+        { title: '操作', width: 230, render: (_, task) => <Space>
+          {task.lastStatus === 'running' ? <Button onClick={() => action(`${task.id}/cancel`)}>停止</Button> : <Button icon={<PlayCircleOutlined/>} onClick={() => action(`${task.id}/run`)}>立即执行</Button>}
+          <Button disabled={task.lastStatus === 'running'} onClick={() => edit(task)}>编辑</Button>
+          <Popconfirm title="删除任务？正在执行的任务会取消。" onConfirm={() => action(task.id, 'DELETE')}><Button danger type="text" icon={<DeleteOutlined/>} aria-label={`删除${task.name}`}/></Popconfirm>
+        </Space> },
+      ]}/>
+    </Flex>
+    <Modal title={editing ? '编辑任务' : '新增任务'} open={open} width={680} onCancel={() => setOpen(false)} confirmLoading={saving} onOk={() => form.submit()}>
+      <Form form={form} layout="vertical" onFinish={async values => {
+        setSaving(true);
+        try {
+          const schedule = { kind: values.kind, repeat: values.repeat,
+            ...(values.kind !== 'scheduled' ? { seconds: values.amount * values.unit } : values.repeat === 'daily' ? { time: values.time } : { runAt: Date.parse(`${values.dateTime}:00+08:00`) }) };
+          await api(editing ? `/tasks/${editing}` : '/tasks', { method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: values.name, prompt: values.prompt, deviceId: values.deviceId, enabled: values.enabled, schedule }) });
+          setOpen(false); refresh(); message.success('任务已保存');
+        } catch (e) { message.error(String(e)); } finally { setSaving(false); }
+      }}>
+        <Columns><Form.Item name="name" label="任务名称" rules={[{ required: true }, { max: 80 }]}><Input maxLength={80}/></Form.Item><Form.Item name="deviceId" label="设备" rules={[{ required: true }]}><Select placeholder="请先登记设备" options={data.devices.map(d => ({ value: d.id, label: `${d.name}${d.online ? '' : '（离线）'}` }))}/></Form.Item></Columns>
+        <Form.Item name="prompt" label="发给小欧的话" rules={[{ required: true, whitespace: true }, { max: 4000 }]}><Input.TextArea rows={3} maxLength={4000} placeholder="例如：查一下今天的天气，简短告诉我出门要注意什么。"/></Form.Item>
+        <Form.Item name="kind" label="触发方式"><Segmented block options={[{ label: '间隔时间', value: 'interval' }, { label: '定时触发', value: 'scheduled' }, { label: '延迟一次', value: 'delay' }]}/></Form.Item>
+        {kind !== 'scheduled' ? <Columns><Form.Item name="amount" label={kind === 'delay' ? '延迟' : '执行间隔'} rules={[{ required: true }]}><InputNumber min={1} max={31536000} precision={0} style={{ width: '100%' }}/></Form.Item><Form.Item name="unit" label="单位"><Select options={[{ value: 1, label: '秒' }, { value: 60, label: '分钟' }, { value: 3600, label: '小时' }]}/></Form.Item></Columns> : <>
+          <Form.Item name="repeat" label="重复"><Select options={[{ value: 'daily', label: '每天' }, { value: 'once', label: '指定日期，仅一次' }]}/></Form.Item>
+          {repeat === 'daily' ? <Form.Item name="time" label="北京时间" rules={[{ required: true }]}><Input type="time"/></Form.Item> : <Form.Item name="dateTime" label="北京时间" rules={[{ required: true }]}><Input type="datetime-local"/></Form.Item>}
+        </>}
+        <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch/></Form.Item>
+      </Form>
+    </Modal>
+  </Panel>;
+}
+
+function RoleSettings({ data, refresh }: { data: Snapshot; refresh: () => void }) {
+  const [form] = Form.useForm(); const { message } = AntApp.useApp();
+  const [roles, setRoles] = useState(data.settings.roles);
+  const [selected, setSelected] = useState(data.settings.activeRoleId);
+  const [saving, setSaving] = useState(false); const [testing, setTesting] = useState(false);
+  const player = useRef<HTMLAudioElement | null>(null); const audioUrl = useRef('');
+  const provider = data.settings.tts.type;
+  useEffect(() => {
+    setRoles(data.settings.roles); setSelected(data.settings.activeRoleId);
+    form.setFieldsValue({ role: data.settings.roles.find(r => r.id === data.settings.activeRoleId), speech: data.settings.speech });
+  }, [JSON.stringify([data.settings.roles, data.settings.activeRoleId, data.settings.speech])]);
+  useEffect(() => () => { player.current?.pause(); if (audioUrl.current) URL.revokeObjectURL(audioUrl.current); }, []);
+  async function drafts() {
+    const values = await form.validateFields();
+    return { values, nextRoles: selected ? roles.map(r => r.id === selected ? { ...values.role, id: r.id } : r) : roles };
+  }
+  async function selectRole(id: string) {
+    try {
+      const { nextRoles } = await drafts(); setRoles(nextRoles); setSelected(id);
+      form.setFieldValue('role', nextRoles.find(r => r.id === id));
+    } catch { /* Keep the current editor open until its fields are valid. */ }
+  }
+  async function addRole() {
+    try {
+      const { nextRoles } = await drafts();
+      const role = { ...structuredClone(FRIEND_ROLE), id: crypto.randomUUID(), name: `新角色 ${nextRoles.length + 1}` };
+      setRoles([...nextRoles, role]); setSelected(role.id); form.setFieldValue('role', role);
+    } catch { /* Form highlights invalid fields. */ }
+  }
+  async function save() {
+    const { values, nextRoles } = await drafts();
+    const settings = { ...data.settings, roles: nextRoles, activeRoleId: selected, speech: values.speech };
+    await api('/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+    setRoles(nextRoles); refresh();
+  }
+  async function preview() {
+    setTesting(true);
+    try {
+      await save();
+      const response = await fetch('/api/tts/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '嘿，你好呀！今天过得怎么样？我在这里，慢慢跟我说。' }) });
+      if (!response.ok) throw new Error((await response.json()).error);
+      player.current?.pause(); if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);
+      audioUrl.current = URL.createObjectURL(await response.blob()); player.current = new Audio(audioUrl.current);
+      await player.current.play(); message.success('已保存，正在试听');
+    } catch (e) { message.error(String(e)); } finally { setTesting(false); }
+  }
+  const speeds = [{ label: '慢', value: 'slow' }, { label: '标准', value: 'normal' }, { label: '快', value: 'fast' }];
+  return <Form form={form} layout="vertical" initialValues={{ speech: data.settings.speech, role: roles.find(r => r.id === selected) }} onFinish={async () => {
+    setSaving(true); try { await save(); message.success('角色与语音设置已保存，下一轮对话生效'); } catch (e) { message.error(String(e)); } finally { setSaving(false); }
+  }}>
+    <Flex vertical gap={12}>
+      <Flex justify="flex-end" wrap gap={8}><Button icon={<PlayCircleOutlined/>} loading={testing} disabled={saving} onClick={preview}>保存并试听</Button><Button type="primary" htmlType="submit" icon={<CheckOutlined/>} loading={saving} disabled={testing}>保存设置</Button></Flex>
+      <Row gutter={[12, 12]}>
+        <Col xs={24} lg={16}><Panel title="角色" extra={<Button icon={<PlusOutlined/>} onClick={addRole} disabled={roles.length >= 20 || saving || testing}>新增角色</Button>}>
+          <Form.Item label="当前角色"><Select value={selected} onChange={selectRole} disabled={saving || testing} options={[{ value: '', label: '默认助手（沿用 AI 设置）' }, ...roles.map(r => ({ value: r.id, label: r.name }))]}/></Form.Item>
+          {selected ? <>
+            <Form.Item name={['role', 'name']} label="角色名称" rules={[{ required: true, whitespace: true }, { max: 80 }]}><Input maxLength={80}/></Form.Item>
+            <Form.Item name={['role', 'voices', provider]} label={`角色音色 · ${provider === 'edge' ? 'Edge TTS' : '兼容 TTS'}`} rules={[{ required: true, whitespace: true }, { max: 128 }]} tooltip="音色由语音合成服务提供，角色介绍影响说话风格。">
+              <AutoComplete options={provider === 'edge' ? EDGE_VOICES : [...new Set(['alloy', data.settings.tts.voice])].map(value => ({ value, label: value }))} placeholder="选择预设或填写音色 ID" filterOption={false}/>
+            </Form.Item>
+            <Form.Item name={['role', 'voices', provider === 'edge' ? 'openai' : 'edge']} hidden><Input/></Form.Item>
+            <Form.Item name={['role', 'prompt']} label="角色介绍" rules={[{ required: true, whitespace: true }, { max: 8000 }]}><Input.TextArea autoSize={{ minRows: 10, maxRows: 22 }} maxLength={8000} showCount/></Form.Item>
+            <Popconfirm title="删除此角色？保存后生效。" onConfirm={() => { setRoles(roles.filter(r => r.id !== selected)); setSelected(''); form.setFieldValue('role', undefined); }}><Button danger icon={<DeleteOutlined/>}>删除角色</Button></Popconfirm>
+          </> : <Typography.Text type="secondary">选择预设或新增角色；默认助手使用 AI 设置中的角色设定和音色。</Typography.Text>}
+        </Panel></Col>
+        <Col xs={24} lg={8}><Panel title="语音设置">
+          <Form.Item name={['speech', 'recognitionSpeed']} label="识别速度" tooltip="调整自动断句等待时间：慢更耐心，快更早提交。手动按键结束录音时由设备决定。"><Segmented block options={speeds}/></Form.Item>
+          <Form.Item name={['speech', 'replySpeed']} label="回复速度"><Segmented block options={speeds}/></Form.Item>
+          <Form.Item name={['speech', 'pitch']} label="回复音调"><Segmented block options={[{ label: '低', value: 'low' }, { label: '标准', value: 'normal' }, { label: '高', value: 'high' }]}/></Form.Item>
+          <Typography.Text type="secondary">适用于设备回复、播报和浏览器试听。</Typography.Text>
+        </Panel></Col>
+      </Row>
+    </Flex>
   </Form>;
 }
 
@@ -284,10 +456,10 @@ function Mcp({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   async function load(id: string) { setBusy(true); setSelected(id); setTool(''); setResult(''); try { setTools((await api(`/mcp/${id}/tools`)).tools); message.success('MCP 连接成功，已读取工具'); } catch (e) { setTools([]); message.error(String(e)); } finally { setBusy(false); } }
   return <Flex vertical gap={12}>
     <Panel title="MCP 服务" extra={<Button type="primary" icon={<PlusOutlined/>} onClick={() => setModal(true)}>添加服务</Button>}>
-      <Table rowKey="id" size="small" dataSource={data.endpoints} pagination={false} scroll={{ x: 560 }} columns={[
+      <Table rowKey="id" size="small" dataSource={[{ id: 'builtin', name: '本地内置工具', url: '时间 / 网页搜索 / Bash', transport: 'builtin' }, ...data.endpoints]} pagination={false} scroll={{ x: 560 }} columns={[
         { title: '名称', dataIndex: 'name' }, { title: '地址', dataIndex: 'url', render: v => <Typography.Text copyable style={{ overflowWrap: 'anywhere' }}>{v}</Typography.Text> },
-        { title: '协议', dataIndex: 'transport', render: v => <Tag>{v.toUpperCase()}</Tag> },
-        { title: '操作', render: (_, e) => <Space><Button type={selected === e.id ? 'primary' : 'default'} onClick={() => load(e.id)} loading={busy && selected === e.id} icon={<LinkOutlined/>}>读取工具</Button><Button type="text" danger icon={<DeleteOutlined/>} aria-label={`删除${e.name}`} onClick={() => api(`/mcp/${e.id}`, { method: 'DELETE' }).then(() => { if (selected === e.id) { setSelected(''); setTools([]); setTool(''); setResult(''); } refresh(); }).catch(error => message.error(String(error)))}/></Space> },
+        { title: '协议', dataIndex: 'transport', render: v => <Tag>{v === 'builtin' ? '内置' : v.toUpperCase()}</Tag> },
+        { title: '操作', render: (_, e) => <Space><Button type={selected === e.id ? 'primary' : 'default'} onClick={() => load(e.id)} loading={busy && selected === e.id} icon={<LinkOutlined/>}>读取工具</Button><Button type="text" danger disabled={e.id === 'builtin'} icon={<DeleteOutlined/>} aria-label={`删除${e.name}`} onClick={() => api(`/mcp/${e.id}`, { method: 'DELETE' }).then(() => { if (selected === e.id) { setSelected(''); setTools([]); setTool(''); setResult(''); } refresh(); }).catch(error => message.error(String(error)))}/></Space> },
       ]}/>
     </Panel>
     <Panel title="工具调试"><Flex vertical gap={8}>

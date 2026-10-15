@@ -13,8 +13,9 @@ export function createDecoder(rate = 16000) {
   if (![8000, 12000, 16000, 24000, 48000].includes(rate)) throw new Error('不支持的音频采样率');
   return new OpusScript(rate as 16000, 1, OpusScript.Application.VOIP);
 }
-export async function toPcm(audio: Uint8Array, rate = 24000, signal?: AbortSignal) {
-  const child = Bun.spawn([process.env.FFMPEG_PATH || 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-t', '180.1', '-f', 's16le', '-ac', '1', '-ar', String(rate), 'pipe:1'], { stdin: audio, stdout: 'pipe', stderr: 'pipe' });
+export async function toPcm(audio: Uint8Array, rate = 24000, signal?: AbortSignal, filters?: string) {
+  signal?.throwIfAborted();
+  const child = Bun.spawn([process.env.FFMPEG_PATH || 'ffmpeg', '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0', '-t', '180.1', ...(filters ? ['-af', filters] : []), '-f', 's16le', '-ac', '1', '-ar', String(rate), 'pipe:1'], { stdin: audio, stdout: 'pipe', stderr: 'pipe' });
   const cancel = () => child.kill();
   signal?.addEventListener('abort', cancel, { once: true });
   const timer = setTimeout(cancel, 30000);
