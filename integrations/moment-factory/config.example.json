@@ -1,0 +1,10 @@
+{
+  "url": "http://127.0.0.1:8791/mcp",
+  "signingKeyFile": "bridge-signing.key",
+  "scope": {
+    "agentId": "industrial-customer-assistant",
+    "identityRef": "REPLACE_WITH_AUTHORIZED_AGENT_IDENTITY_REF",
+    "tenantId": "CUSTOMER:REPLACE_WITH_ACTUAL_OWNER_ID"
+  },
+  "allowedTools": ["platform.listMdmDevices", "platform.listWorkOrderMyChatRooms"]
+}

@@ -1,0 +1,105 @@
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { createServer } from 'node:net';
+import { createSocket } from 'node:dgram';
+import { once } from 'node:events';
+import mqtt from 'mqtt';
+import { startApp } from '../server/index';
+import { pcmToWav, encodePcm, createDecoder } from '../server/audio';
+import { encryptUdp, decryptUdp } from '../server/protocol';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { z } from 'zod';
+
+async function freePort() { const s = createServer(); s.listen(0, '127.0.0.1'); await once(s, 'listening'); const port = (s.address() as { port: number }).port; await new Promise<void>(r => s.close(() => r())); return port; }
+async function until(predicate: () => boolean, timeout = 8000) { const end = Date.now() + timeout; while (!predicate()) { if (Date.now() > end) throw new Error('等待集成结果超时'); await Bun.sleep(15); } }
+function tone(rate = 24000, seconds = 0.25) { const pcm = Buffer.alloc(Math.floor(rate * seconds) * 2); for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.sin(i * 2 * Math.PI * 330 / rate) * 8000, i * 2); return pcm; }
+
+describe('real network integration (mocked AI, real transports and codecs)', () => {
+  let app: Awaited<ReturnType<typeof startApp>>; let upstream: ReturnType<typeof Bun.serve>; let directory: string; let base: string; let mqttPort: number; let udpPort: number;
+  let mcpHost: ReturnType<typeof Bun.serve>; let mcpServer: McpServer;
+  const seen: string[] = [];
+  beforeAll(async () => {
+    directory = mkdtempSync(`${tmpdir()}/xiaozhi-integration-`); mqttPort = await freePort(); udpPort = await freePort();
+    upstream = Bun.serve({ port: 0, async fetch(req) {
+      const path = new URL(req.url).pathname; const body = await req.json() as any; seen.push(path);
+      if (path === '/v1/audio/speech') return new Response(new Uint8Array(pcmToWav(tone())), { headers: { 'Content-Type': 'audio/wav' } });
+      if (body.model === 'asr-test') return Response.json({ choices: [{ message: { role: 'assistant', content: '你好小智' } }] });
+      return Response.json({ choices: [{ message: { role: 'assistant', content: '你好，这是本地回复。' } }] });
+    } });
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => crypto.randomUUID() });
+    mcpServer = new McpServer({ name: 'test-tools', version: '1.0.0' });
+    mcpServer.registerTool('sum', { description: '相加', inputSchema: { a: z.number(), b: z.number() } }, async ({ a, b }) => ({ content: [{ type: 'text', text: String(a + b) }] }));
+    await mcpServer.connect(transport); mcpHost = Bun.serve({ port: 0, fetch: req => transport.handleRequest(req) });
+    app = await startApp({ port: 0, mqttPort, udpPort, dataDir: directory }); base = `http://127.0.0.1:${app.server.port}`;
+    const c = structuredClone(app.store.settings); c.publicHost = '127.0.0.1';
+    c.llm = { ...c.llm, baseUrl: `http://127.0.0.1:${upstream.port}/v1`, apiKey: 'private-llm-key', model: 'chat-test' };
+    c.asr = { ...c.asr, baseUrl: c.llm.baseUrl, apiKey: 'private-asr-key', model: 'asr-test' };
+    c.tts = { ...c.tts, type: 'openai', baseUrl: c.llm.baseUrl, apiKey: 'private-tts-key', voice: 'test' };
+    app.store.saveSettings(c);
+  });
+  afterAll(async () => { await app?.close(); upstream?.stop(true); mcpHost?.stop(true); await mcpServer?.close(); if (directory) rmSync(directory, { recursive: true, force: true }); });
+  async function request(path: string, body?: unknown) { return fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+  async function register(id: string, transport = 'websocket') { const r = await request('/api/provision', { id, transport, board: 'wha103' }); expect(r.ok).toBe(true); return r.json() as Promise<any>; }
+
+  test('local management hides secrets, blocks foreign origins; OTA only provisions registered devices', async () => {
+    const settings = await (await request('/api/snapshot')).text(); expect(settings).not.toContain('private-llm-key'); expect(settings).toContain('••••••••');
+    expect((await fetch(base + '/api/snapshot', { headers: { Origin: 'https://untrusted.example' } })).status).toBe(403);
+    expect((await fetch(base + '/xiaozhi/ota/', { method: 'POST', headers: { 'device-id': 'unknown' }, body: '{}' })).status).toBe(403);
+    await register('cc:00:00:00:00:01');
+    const ota = await (await fetch(base + '/xiaozhi/ota/', { method: 'POST', headers: { 'device-id': 'cc:00:00:00:00:01' }, body: JSON.stringify({ application: { version: '2.0.5' } }) })).json() as any;
+    expect(ota.websocket.url).toContain(String(app.server.port)); expect(ota.websocket.token).toBe(app.store.token('cc:00:00:00:00:01')); expect(ota.firmware.url).toBe('');
+    app.store.log('error', 'test', 'upstream private-llm-key Bearer test-token');
+    expect(await (await request('/api/snapshot')).text()).not.toContain('test-token');
+  });
+
+  test('WebSocket microphone → ASR → chat → TTS → real Opus; active audio and cleanup', async () => {
+    const id = 'cc:00:00:00:00:02'; await register(id);
+    const ws = new WebSocket(`ws://127.0.0.1:${app.server.port}/xiaozhi/v1/?device_id=${encodeURIComponent(id)}&token=${app.store.token(id)}`);
+    const control: any[] = []; const frames: Buffer[] = [];
+    ws.onmessage = e => { if (typeof e.data === 'string') control.push(JSON.parse(e.data)); else frames.push(Buffer.from(e.data)); };
+    await once(ws, 'open'); ws.send(JSON.stringify({ type: 'hello', version: 1, audio_params: { sample_rate: 16000, frame_duration: 60 } }));
+    await until(() => control.some(m => m.type === 'hello')); expect(control.find(m => m.type === 'hello').audio_params.sample_rate).toBe(24000);
+    ws.send(JSON.stringify({ type: 'listen', state: 'start', mode: 'manual' }));
+    for (const frame of encodePcm(tone(16000, 0.6), 60, 16000)) ws.send(new Uint8Array(frame));
+    ws.send(JSON.stringify({ type: 'listen', state: 'stop' }));
+    await until(() => frames.length > 0 && control.some(m => m.type === 'tts' && m.state === 'sentence_end'));
+    expect(control.some(m => m.type === 'stt' && m.text === '你好小智')).toBe(true);
+    const decoder = createDecoder(24000); try { expect(decoder.decode(frames[0]!).length).toBe(2880); } finally { decoder.delete(); }
+    expect(seen).toContain('/v1/chat/completions'); expect(seen).toContain('/v1/audio/speech');
+    await until(() => !app.manager.get(id).busy);
+    const before = frames.length; expect((await request(`/api/devices/${encodeURIComponent(id)}/speak`, { text: '主动播报测试' })).status).toBe(202);
+    await until(() => frames.length > before && !app.manager.get(id).busy);
+    ws.close(); await until(() => !app.manager.sessions.has(id)); expect(app.store.devices.get(id)?.online).toBe(false);
+  }, 15000);
+
+  test('MQTT control + encrypted UDP audio upstream and downstream', async () => {
+    const id = 'cc:00:00:00:00:03'; await register(id, 'mqtt');
+    const client = mqtt.connect(`mqtt://127.0.0.1:${mqttPort}`, { clientId: 'test-mqtt-client', username: id, password: app.store.token(id), protocolVersion: 4, reconnectPeriod: 0 });
+    const controls: any[] = []; client.on('message', (_, payload) => controls.push(JSON.parse(payload.toString())));
+    await new Promise<void>((resolve, reject) => { client.once('connect', () => resolve()); client.once('error', reject); }); await client.subscribeAsync(`xiaozhi/${id}/down`);
+    await client.publishAsync(`xiaozhi/${id}/up`, JSON.stringify({ type: 'hello', version: 3, audio_params: { sample_rate: 16000, frame_duration: 60 } }));
+    await until(() => controls.some(m => m.type === 'hello'));
+    const hello = controls.find(m => m.type === 'hello'); expect(hello.transport).toBe('udp');
+    const key = Buffer.from(hello.udp.key, 'hex'); const nonce = Buffer.from(hello.udp.nonce, 'hex'); const udp = createSocket('udp4'); const received: Buffer[] = [];
+    udp.on('message', packet => received.push(packet)); udp.bind(0, '127.0.0.1'); await once(udp, 'listening');
+    try {
+      await client.publishAsync(`xiaozhi/${id}/up`, JSON.stringify({ type: 'listen', state: 'start', mode: 'manual' }));
+      await Bun.sleep(20); const input = encodePcm(tone(16000, 0.6), 60, 16000);
+      for (let i = 0; i < input.length; i++) { udp.send(encryptUdp(input[i]!, key, nonce, i + 1, i * 60), udpPort, '127.0.0.1'); await Bun.sleep(3); }
+      await client.publishAsync(`xiaozhi/${id}/up`, JSON.stringify({ type: 'listen', state: 'stop' }));
+      await until(() => received.length > 0 && controls.some(m => m.type === 'tts' && m.state === 'sentence_end'));
+      const decoded = decryptUdp(received[0]!, key, 0); const codec = createDecoder(24000); try { expect(codec.decode(decoded.frame).length).toBe(2880); } finally { codec.delete(); }
+      expect(app.store.devices.get(id)?.inputFrames).toBe(input.length);
+    } finally { udp.close(); await client.endAsync(); }
+    await until(() => !app.manager.sessions.has(id));
+  }, 15000);
+
+  test('actual MCP HTTP initialization, tools/list and tools/call', async () => {
+    const r = await request('/api/mcp', { name: 'test', url: `http://127.0.0.1:${mcpHost.port}/mcp`, transport: 'http', token: '' }); const config = await r.json() as any;
+    const tools = await (await request(`/api/mcp/${config.id}/tools`)).json() as any; expect(tools.tools[0].name).toBe('sum');
+    const result = await (await request(`/api/mcp/${config.id}/call`, { name: 'sum', arguments: { a: 3, b: 7 } })).json() as any; expect(result.content[0].text).toBe('10');
+    await fetch(base + `/api/mcp/${config.id}`, { method: 'DELETE' });
+  });
+});

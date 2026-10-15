@@ -1,0 +1,43 @@
+{
+  "name": "xiaozhi-selfhost",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run scripts/dev.ts",
+    "server": "bun --watch server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "bun server/index.ts",
+    "test": "bun test",
+    "check": "tsc --noEmit",
+    "setup:voiceprint": "bun scripts/setup-voiceprint.ts",
+    "mcp:moment": "bun integrations/moment-factory/main.ts"
+  },
+  "dependencies": {
+    "@ant-design/icons": "latest",
+    "@modelcontextprotocol/sdk": "latest",
+    "antd": "latest",
+    "esptool-js": "latest",
+    "js-md5": "^0.9.2",
+    "mqtt": "latest",
+    "node-edge-tts": "latest",
+    "opusscript": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "latest",
+    "@types/bun": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/w3c-web-serial": "latest",
+    "@vitejs/plugin-react": "latest",
+    "tailwindcss": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-node": "^1.13.8"
+  }
+}
