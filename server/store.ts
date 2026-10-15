@@ -2,7 +2,7 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
-import { SettingsSchema, type Settings, type Device, type LogEvent, type Json, type McpEndpoint, type Speaker } from '../shared/types';
+import { SettingsSchema, type Settings, type Device, type LogEvent, type Json, type McpEndpoint, type Speaker, type ChatMessage } from '../shared/types';
 import { BrowserAudioCache } from './browser-audio';
 
 export function localHost() {
@@ -27,7 +27,8 @@ export class Store {
     chmodSync(`${dir}/xiaozhi.sqlite`, 0o600);
     this.db.exec(`PRAGMA journal_mode = WAL; CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, time INTEGER, level TEXT, scope TEXT, message TEXT, deviceId TEXT);
-      CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, deviceId TEXT, role TEXT, text TEXT, time INTEGER, speaker TEXT);`);
+      CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, deviceId TEXT, role TEXT, text TEXT, time INTEGER, speaker TEXT);
+      CREATE TABLE IF NOT EXISTS message_audio (messageId INTEGER PRIMARY KEY, audio BLOB NOT NULL);`);
     this.secret = this.get('secret') || randomBytes(32).toString('hex');
     this.set('secret', this.secret);
     this.settings = SettingsSchema.parse(this.get('settings') || {
@@ -58,11 +59,29 @@ export class Store {
     const device: Device = { id, name: existing?.name || `小智 ${id.slice(-5)}`, board: '', firmware: '', transport: 'websocket', online: false, state: 'offline', lastSeen: Date.now(), inputFrames: 0, outputFrames: 0, ...existing, ...patch };
     this.devices.set(id, device); this.set('devices', [...this.devices.values()]); this.emit('device', device); return device;
   }
-  message(deviceId: string, role: string, text: string, speaker?: string) {
+  message(deviceId: string, role: string, text: string, speaker?: string, userAudio?: Buffer) {
     const time = Date.now();
     const result = this.db.query('INSERT INTO messages(deviceId,role,text,time,speaker) VALUES (?,?,?,?,?)').run(deviceId, role, text, time, speaker || null);
-    this.emit('message', { id: Number(result.lastInsertRowid), deviceId, role, text, time, speaker });
+    const id = Number(result.lastInsertRowid);
+    const hasAudio = role === 'user' && userAudio && userAudio.length <= 3 * 1024 * 1024;
+    if (hasAudio) this.db.query('INSERT INTO message_audio(messageId,audio) VALUES (?,?)').run(id, userAudio);
+    this.emit('message', { id, deviceId, role, text, time, speaker, ...(hasAudio ? { audioUrl: `/api/messages/${id}/audio` } : {}) });
     this.db.exec('DELETE FROM messages WHERE id < (SELECT COALESCE(MAX(id),0)-5000 FROM messages)');
+    this.db.exec(`DELETE FROM message_audio WHERE messageId NOT IN (SELECT id FROM messages);
+      DELETE FROM message_audio WHERE messageId IN (
+        SELECT messageId FROM (
+          SELECT messageId, SUM(length(audio)) OVER (ORDER BY messageId DESC) AS totalBytes,
+            ROW_NUMBER() OVER (ORDER BY messageId DESC) AS position FROM message_audio
+        ) WHERE totalBytes > 67108864 OR position > 200
+      );`);
+  }
+  messages(limit = 200): ChatMessage[] {
+    return this.db.query(`SELECT m.*, CASE WHEN a.messageId IS NOT NULL THEN '/api/messages/' || m.id || '/audio' END AS audioUrl
+      FROM (SELECT * FROM messages ORDER BY id DESC LIMIT ?) m LEFT JOIN message_audio a ON a.messageId=m.id ORDER BY m.id`).all(limit) as ChatMessage[];
+  }
+  userAudio(id: number) {
+    const row = this.db.query("SELECT a.audio FROM message_audio a JOIN messages m ON m.id=a.messageId WHERE m.id=? AND m.role='user'").get(id) as { audio: Uint8Array } | null;
+    return row?.audio;
   }
   publicSettings() { const copy = structuredClone(this.settings); for (const p of [copy.llm, copy.asr, copy.tts, copy.voiceprint]) p.apiKey = p.apiKey ? '••••••••' : ''; return copy; }
   saveSettings(input: unknown) {

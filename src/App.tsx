@@ -194,7 +194,7 @@ function Devices({ data, refresh }: { data: Snapshot; refresh: () => void }) {
   const messages = data.messages.filter(m => m.deviceId === id); useEffect(() => { chatEnd.current?.scrollIntoView({ block: 'nearest' }); }, [data.messages]);
   async function action(kind: string) { if (!id) return; if (kind === 'abort') speechPlayer.current?.stop(); setBusy(true); try { await post(`/devices/${encodeURIComponent(id)}/${kind}`, { text }); if (kind !== 'abort') setText(''); message.success(kind === 'abort' ? '已停止播报' : '请求已提交，结果见对话和日志'); } catch (e) { message.error(String(e)); } finally { setBusy(false); } }
   return <Row gutter={[12, 12]}>
-    <Col xs={24} lg={6}><Panel title="设备" extra={<Button icon={<PlusOutlined/>} onClick={() => setRegister(true)}>登记</Button>}>
+    <Col xs={24} lg={6}><Flex vertical gap={12}><Panel title="设备" extra={<Button icon={<PlusOutlined/>} onClick={() => setRegister(true)}>登记</Button>}>
       {data.devices.length ? <Menu mode="inline" selectedKeys={id ? [id] : []} onClick={({ key }) => { setSelected(key); setTools([]); setTool(''); setResult(''); }} items={data.devices.map(d => ({ key: d.id, label: <Space><Badge status={d.online ? 'success' : 'default'}/>{d.name}</Space>, title: `${d.board} · ${d.id}` }))}/> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无设备"/>}
       {device && <Descriptions size="small" column={1} style={{ marginTop: 12 }} items={[
         { key: 'mac', label: 'MAC', children: device.id }, { key: 'board', label: '板型', children: device.board || '未知' },
@@ -202,18 +202,26 @@ function Devices({ data, refresh }: { data: Snapshot; refresh: () => void }) {
         { key: 'frames', label: '音频帧', children: `↑ ${device.inputFrames} / ↓ ${device.outputFrames}` },
         ...(device.speaker ? [{ key: 'speaker', label: '说话人', children: device.speaker }] : []),
       ]}/>}
-    </Panel></Col>
+    </Panel>
+    <Card size="small">
+      <Flex vertical gap={8} role="group" aria-label="网页声音控制">
+        <Space wrap><Switch checked={webAudio} onChange={setWebAudio} aria-label="网页自动播报"/><Typography.Text>网页自动播报</Typography.Text>{playback.status === 'playing' && <Tag color="blue">播放中</Tag>}{playback.status === 'loading' && <Tag>加载中</Tag>}</Space>
+        <Button block icon={<StopOutlined/>} disabled={playback.status === 'idle'} onClick={() => speechPlayer.current?.stop()}>停止网页声音</Button>
+        {playback.status === 'blocked' && <Alert type="info" showIcon title="点击一次开启网页声音" action={<Button type="primary" onClick={() => speechPlayer.current?.resume()}>点击播放</Button>}/>}
+        {playback.status === 'error' && <Alert type="warning" showIcon title={playback.error}/>}
+      </Flex>
+    </Card>
+    </Flex></Col>
     <Col xs={24} lg={18}><Flex vertical gap={12}>
       <Panel title={<Space>{device?.name || '设备对话'}{device && <Status online={device.online} text={states[device.state] || device.state}/>}</Space>} extra={device && <Tag>{device.transport === 'mqtt' ? 'MQTT + UDP' : 'WebSocket'}</Tag>}>
         <Flex vertical gap={12}>
-          <Flex justify="space-between" align="center" wrap gap={8}>
-            <Space><Switch checked={webAudio} onChange={setWebAudio} aria-label="网页自动播报"/><Typography.Text>网页自动播报</Typography.Text>{playback.status === 'playing' && <Tag color="blue">播放中</Tag>}{playback.status === 'loading' && <Tag>加载中</Tag>}</Space>
-            <Button icon={<StopOutlined/>} disabled={playback.status === 'idle'} onClick={() => speechPlayer.current?.stop()}>停止网页声音</Button>
-          </Flex>
-          {playback.status === 'blocked' && <Alert type="info" showIcon title="点击一次开启网页声音" action={<Button type="primary" onClick={() => speechPlayer.current?.resume()}>点击播放</Button>}/>}
-          {playback.status === 'error' && <Alert type="warning" showIcon title={playback.error}/>}
           <div className="chat-history">{messages.length ? messages.map(m => <Card size="small" key={m.id} style={{ marginBottom: 8 }}>
-            <Flex vertical gap={4}><Space><Typography.Text strong>{m.role === 'user' ? m.speaker || '用户' : m.role === 'broadcast' ? '播报' : '小智'}</Typography.Text><Typography.Text type="secondary">{shortTime(m.time)}</Typography.Text></Space><Typography.Text style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</Typography.Text></Flex>
+            <Flex vertical gap={4}><Space wrap><Typography.Text strong>{m.role === 'user' ? m.speaker || '用户' : m.role === 'broadcast' ? '播报' : '小智'}</Typography.Text><Typography.Text type="secondary">{shortTime(m.time)}</Typography.Text>
+              {m.role === 'user' && <Button size="small" type="text" disabled={!m.audioUrl} icon={playback.id === `user-${m.id}` ? <StopOutlined/> : <PlayCircleOutlined/>} title={m.audioUrl ? '在网页播放这次输入的原始录音' : '文字输入或历史消息未保存录音'} onClick={() => {
+                if (playback.id === `user-${m.id}`) speechPlayer.current?.stop();
+                else if (m.audioUrl) speechPlayer.current?.playManual({ id: `user-${m.id}`, deviceId: m.deviceId, url: m.audioUrl, text: m.text });
+              }}>{!m.audioUrl ? '无录音' : playback.id === `user-${m.id}` ? '停止原声' : '播放原声'}</Button>}
+            </Space><Typography.Text style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{m.text}</Typography.Text></Flex>
           </Card>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={device?.online ? '暂无对话' : '请先唤醒设备'}/>}<div ref={chatEnd}/></div>
           <Input.TextArea value={text} onChange={e => setText(e.target.value)} placeholder="输入对话或播报内容" autoSize={{ minRows: 2, maxRows: 5 }} maxLength={4000}/>
           <Flex justify="space-between" wrap gap={8}>

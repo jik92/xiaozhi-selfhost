@@ -45,6 +45,17 @@ test('a late play promise cannot revive a stopped voice', async () => {
   const player = new BrowserSpeechPlayer(audio as unknown as HTMLAudioElement, state => states.push(state)); player.configure('a', true); player.enqueue(clip('late'));
   player.stop(); resolve(); await flush(); expect(states.at(-1)?.status).toBe('idle'); player.dispose();
 });
+test('manual user-voice replay works with autoplay disabled and is not interrupted by another clip', async () => {
+  const audio = new FakeAudio(); const states: PlaybackState[] = [];
+  const player = new BrowserSpeechPlayer(audio as unknown as HTMLAudioElement, state => states.push(state));
+  player.configure('a', false); player.enqueue(clip('automatic')); expect(audio.calls).toBe(0);
+  player.playManual(clip('user-1')); await flush();
+  expect(audio.calls).toBe(1); expect(states.at(-1)).toEqual({ status: 'playing', id: 'user-1' });
+  player.interrupt({ deviceId: 'a', id: 'automatic' }); expect(audio.src).toContain('user-1');
+  player.playManual(clip('user-2')); await flush(); expect(audio.src).toContain('user-2');
+  player.configure('b', false); expect(audio.src).toBe('');
+  player.playManual(clip('wrong-device')); expect(audio.calls).toBe(2); player.dispose();
+});
 test('temporary browser audio has a memory bound and expires without persistent storage', () => {
   let now = 1000; const cache = new BrowserAudioCache(() => now, 10, 100);
   const first = cache.add('a', Buffer.from('123456'), 'one')!;

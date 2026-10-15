@@ -25,7 +25,7 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
   let mqtt: Awaited<ReturnType<typeof startMqtt>> | undefined;
   let activePort = port;
   function connection(): Snapshot['connection'] { const host = store.settings.publicHost; return { host, port: activePort, mqttPort, udpPort, otaUrl: `http://${host}:${activePort}/xiaozhi/ota/`, websocketUrl: `ws://${host}:${activePort}/xiaozhi/v1/` }; }
-  function snapshot(): Snapshot { return { devices: [...store.devices.values()], logs: store.db.query('SELECT * FROM logs ORDER BY id DESC LIMIT 150').all().reverse() as Snapshot['logs'], messages: store.db.query('SELECT * FROM messages ORDER BY id DESC LIMIT 200').all().reverse() as Snapshot['messages'], settings: store.publicSettings(), tasks: tasks.list(), endpoints: store.endpoints().map(e => ({ ...e, token: e.token ? '••••••••' : '' })), speakers: store.speakers(), connection: connection(), health: { ffmpeg: !!Bun.which(process.env.FFMPEG_PATH || 'ffmpeg'), aiConfigured: !!store.settings.llm.apiKey, voiceprintModel: providers.speaker.available() } }; }
+  function snapshot(): Snapshot { return { devices: [...store.devices.values()], logs: store.db.query('SELECT * FROM logs ORDER BY id DESC LIMIT 150').all().reverse() as Snapshot['logs'], messages: store.messages(), settings: store.publicSettings(), tasks: tasks.list(), endpoints: store.endpoints().map(e => ({ ...e, token: e.token ? '••••••••' : '' })), speakers: store.speakers(), connection: connection(), health: { ffmpeg: !!Bun.which(process.env.FFMPEG_PATH || 'ffmpeg'), aiConfigured: !!store.settings.llm.apiKey, voiceprintModel: providers.speaker.available() } }; }
   const server = Bun.serve<WsData>({
     port, hostname: '0.0.0.0', maxRequestBodySize: 24 * 1024 * 1024, idleTimeout: 120,
     async fetch(req, server) {
@@ -62,6 +62,11 @@ export async function startApp(options: { port?: number; mqttPort?: number; udpP
           return json(result);
         }
         if (path === '/api/snapshot') return json(snapshot());
+        const userAudioRoute = path.match(/^\/api\/messages\/([1-9]\d{0,14})\/audio$/);
+        if (userAudioRoute && req.method === 'GET') {
+          const audio = store.userAudio(Number(userAudioRoute[1]));
+          return audio ? new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' } }) : json({ error: '此消息没有保留原始录音' }, 404);
+        }
         const browserAudioRoute = path.match(/^\/api\/browser-audio\/([a-zA-Z0-9-]+)$/);
         if (browserAudioRoute && req.method === 'GET') {
           const audio = store.browserAudio.get(browserAudioRoute[1]!);

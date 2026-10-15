@@ -133,18 +133,18 @@ export class DeviceSession {
           this.store.log('info', '唤醒', '语音未匹配唤醒前缀或未包含指令，已跳过对话', this.id);
           return;
         }
-        this.busy = false; await this.chat(command, speaker, controller);
+        this.busy = false; await this.chat(command, speaker, controller, wav);
       }
     } catch (error) { this.fail(error, controller); }
     finally { if (this.controller === controller) { this.busy = false; this.state('idle'); } }
   }
-  async chat(text: string, speaker?: string, previous?: AbortController) {
+  async chat(text: string, speaker?: string, previous?: AbortController, userAudio?: Buffer) {
     if (this.busy) throw new Error('设备正在处理上一条请求');
     text = text.trim().slice(0, 4000); if (!text) throw new Error('请输入对话内容');
     const controller = previous || new AbortController(); this.controller = controller; this.busy = true; this.state('thinking');
     const checkpoint = this.history.length;
     try {
-      const answer = await runConversation({ store: this.store, providers: this.providers, mcp: this.mcp, deviceId: this.id, text, speaker, signal: controller.signal, history: this.history, tools: this.tools, callDevice: (name, args) => this.rpc('tools/call', { name, arguments: args }) });
+      const answer = await runConversation({ store: this.store, providers: this.providers, mcp: this.mcp, deviceId: this.id, text, speaker, userAudio, signal: controller.signal, history: this.history, tools: this.tools, callDevice: (name, args) => this.rpc('tools/call', { name, arguments: args }) });
       await this.speak(answer, controller);
       trimHistory(this.history);
     } catch (error) { this.history.splice(checkpoint); this.fail(error, controller); }

@@ -30,7 +30,7 @@ export const SettingsSchema = z.object({
 export type Settings = z.infer<typeof SettingsSchema>;
 export interface Device { id: string; name: string; board: string; firmware: string; transport: 'websocket' | 'mqtt'; online: boolean; state: string; lastSeen: number; speaker?: string; inputFrames: number; outputFrames: number; }
 export interface LogEvent { id: number; time: number; level: 'info' | 'success' | 'warn' | 'error'; scope: string; message: string; deviceId?: string; }
-export interface ChatMessage { id: number; deviceId: string; role: string; text: string; time: number; speaker?: string; }
+export interface ChatMessage { id: number; deviceId: string; role: string; text: string; time: number; speaker?: string; audioUrl?: string; }
 export interface McpEndpoint { id: string; name: string; url: string; transport: 'http' | 'sse'; token: string; }
 export interface Speaker { id: string; name: string; description: string; enrolled: boolean; }
 export interface Snapshot { devices: Device[]; logs: LogEvent[]; messages: ChatMessage[]; settings: Settings; tasks: AiTask[]; endpoints: Omit<McpEndpoint, 'token'>[]; speakers: Speaker[]; connection: { host: string; port: number; mqttPort: number; udpPort: number; otaUrl: string; websocketUrl: string; }; health: { ffmpeg: boolean; aiConfigured: boolean; voiceprintModel: boolean; }; }

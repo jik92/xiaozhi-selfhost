@@ -11,12 +11,12 @@ export function trimHistory(history: Json[]) {
 
 export async function runConversation(input: {
   store: Store; providers: Providers; mcp: McpManager; deviceId: string; text: string; signal: AbortSignal;
-  history: Json[]; tools?: Json[]; speaker?: string; callDevice?: (name: string, args: Json) => Promise<Json>;
+  history: Json[]; tools?: Json[]; speaker?: string; userAudio?: Buffer; callDevice?: (name: string, args: Json) => Promise<Json>;
 }) {
   const { store, providers, mcp, deviceId, signal, history, speaker } = input;
   const text = input.text.trim().slice(0, 4000); if (!text) throw new Error('请输入对话内容');
   const checkpoint = history.length;
-  store.message(deviceId, 'user', text, speaker); history.push({ role: 'user', content: text });
+  store.message(deviceId, 'user', text, speaker, input.userAudio); history.push({ role: 'user', content: text });
   try {
     const remote = await mcp.available();
     const deviceTools = input.tools || [];
